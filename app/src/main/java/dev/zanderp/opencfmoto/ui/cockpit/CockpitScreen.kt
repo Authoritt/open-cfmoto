@@ -144,6 +144,11 @@ fun CockpitScreen(nav: NavController) {
     // cockpitMode = show the widget dash (music strip); false = just the map, full-bleed.
     var cockpitMode by rememberSaveable { mutableStateOf(true) }
 
+    // Mirror the Mapa|Panel choice to the projected bike dash so Panel shows the now-playing strip
+    // there too (not just on the phone). DashRemote remembers it for a dash that binds later; when a
+    // dash is already projecting it flips live with no PXC reconnect.
+    LaunchedEffect(cockpitMode) { DashRemote.applyPanelMode(cockpitMode) }
+
     // The full-bleed map now renders the SELECTED engine (SettingsStore.dashRenderer) through the
     // Overtake library's MapRenderer — the SAME renderer the dash uses, so the cockpit matches the dash
     // (WYSIWYG). The old embed hardcoded raw osmdroid Mapnik and ignored the choice, so MapLibre
@@ -355,6 +360,9 @@ fun CockpitScreen(nav: NavController) {
         // GpxSession / the follow camera don't keep pointing at the old destination.
         if (navigating) {
             runCatching { GpxSession.finishToFreeRide() }
+            // Clear the old route on the live dash before the new pick re-targets it (startNavigation
+            // sends the fresh DashRemote.navigateTo); otherwise the stale route lingers in between.
+            if (DashRemote.isAvailable) runCatching { DashRemote.endNavigation() }
             following = false
             navigating = false
             navProgress = null
@@ -409,6 +417,9 @@ fun CockpitScreen(nav: NavController) {
     // follow camera and all nav state; GpxSession returns to FREE_RIDE (the dash projection follows).
     fun stopNavigation() {
         runCatching { GpxSession.finishToFreeRide() }
+        // Tell the LIVE bike dash the trip ended too, so it clears the route and stops turn-by-turn
+        // voice instead of showing a stale, still-talking navigation (no PXC reconnect).
+        if (DashRemote.isAvailable) runCatching { DashRemote.endNavigation() }
         clearSearchOverlays()
         following = false // stops the chase in the location listener
         navigating = false

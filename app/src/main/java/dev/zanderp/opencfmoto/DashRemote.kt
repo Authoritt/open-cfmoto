@@ -16,6 +16,16 @@ object DashRemote {
     @Volatile private var navHandler: ((MapPlace) -> Unit)? = null
     @Volatile private var typeOnPhone: (() -> Unit)? = null
     @Volatile private var themeHandler: ((Boolean) -> Unit)? = null
+    @Volatile private var endHandler: (() -> Unit)? = null
+    @Volatile private var panelHandler: ((Boolean) -> Unit)? = null
+
+    /**
+     * The Map|Panel mode the phone last chose (true = Panel, i.e. the map + now-playing split). A dash
+     * reads this on bind so it starts in the right mode even when the rider flipped the toggle BEFORE
+     * this dash began projecting.
+     */
+    @Volatile var panelMode: Boolean = false
+        private set
 
     /** True when a dash is bound and can receive a search (e.g. projected to the bike). */
     val isAvailable: Boolean get() = handler != null
@@ -34,6 +44,14 @@ object DashRemote {
 
     fun setThemeHandler(h: ((Boolean) -> Unit)?) {
         themeHandler = h
+    }
+
+    fun setEndHandler(h: (() -> Unit)?) {
+        endHandler = h
+    }
+
+    fun setPanelHandler(h: ((Boolean) -> Unit)?) {
+        panelHandler = h
     }
 
     /** Send a search query to the active dash. Returns false if no dash is listening. */
@@ -59,6 +77,30 @@ object DashRemote {
     fun requestTypeOnPhone(): Boolean {
         val h = typeOnPhone ?: return false
         h()
+        return true
+    }
+
+    /**
+     * End the ride/route on the active (already-projected) dash: it drops the route, stops
+     * turn-by-turn voice, and returns to a clean free-ride map — with NO PXC reconnect. Called when
+     * the rider ends the trip on the phone so the bike dash doesn't keep showing a stale route (and
+     * keep speaking guidance). Returns false if no dash is listening.
+     */
+    fun endNavigation(): Boolean {
+        val h = endHandler ?: return false
+        h()
+        return true
+    }
+
+    /**
+     * Choose the dash's Map|Panel mode (Panel = the map + now-playing music strip). Remembers it in
+     * [panelMode] for a dash that binds later, and flips the LIVE (already-projected) dash in place —
+     * no PXC reconnect. Returns false if no dash is listening (the choice still applies on next bind).
+     */
+    fun applyPanelMode(panel: Boolean): Boolean {
+        panelMode = panel
+        val h = panelHandler ?: return false
+        h(panel)
         return true
     }
 
