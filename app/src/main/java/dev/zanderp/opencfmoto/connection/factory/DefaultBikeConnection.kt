@@ -5,6 +5,7 @@ package dev.zanderp.opencfmoto.connection.factory
 
 import android.content.Context
 import android.net.Network
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Inputs to the connection state machine (design doc 2026-08-18 section 6). Emitted by
@@ -52,6 +55,10 @@ internal const val FLAP_WINDOW_NS = 60_000_000_000L // 60 s
 
 /** Total drops within [FLAP_WINDOW_NS] before a pathologically flapping link is declared fatal (F6). */
 internal const val FLAP_MAX_FAILURES = 12
+
+/** Bounded wait for `disconnectAndAwaitTeardown` — teardown does no network I/O, so this only caps a wedged
+ *  driver; the caller (main thread at a mode switch) must never hang unboundedly (review I1). */
+internal const val TEARDOWN_AWAIT_MS = 2_000L
 
 /** Capped exponential backoff: base * 2^(attempt-1), clamped to [RETRY_CAP_MS]. `attempt` starts at 1. */
 internal fun backoffMs(attempt: Int): Long =
@@ -147,14 +154,13 @@ class DefaultBikeConnection(
     private var endpoint: BikeEndpoint? = null
 
     /**
-     * Fresh [Network] handed in by a Wi-Fi re-acquire ([onWifiReacquired]); consumed by the driver coroutine
-     * on the next [ConnEvent.LinkDropped] to refresh the endpoint before re-establishing (design §3). A
-     * `@Volatile` HINT written from a caller thread (NOT a driver-confined field): last-write-wins is correct —
-     * the newest re-acquired network is exactly what we want to re-establish on. A stale endpoint Network is
-     * fatal to `EasyConnProber.start` (null link props → abort), so the fresh one MUST reach the prober.
+     * Fresh [Network] handed in by a Wi-Fi re-acquire ([onWifiReacquired], from the BikeWifi ConnectivityThread —
+     * NOT the main looper); consumed EXACTLY ONCE by the driver coroutine on the next [ConnEvent.LinkDropped] via
+     * [AtomicReference.getAndSet] so a second re-acquire landing between the read and the clear can't drop a fresh
+     * [Network] (review M1). A stale endpoint Network is fatal to `EasyConnProber.start` (null link props →
+     * abort), so the newest fresh one MUST reach the prober; last-write-wins on the set is exactly what we want.
      */
-    @Volatile
-    private var reacquiredNetwork: Network? = null
+    private val reacquiredNetwork = AtomicReference<Network?>(null)
 
     override fun connect() {
         synchronized(lifecycleLock) {
@@ -194,8 +200,21 @@ class DefaultBikeConnection(
      * thus this event's receiver — alive across a long outage so a later re-acquire always recovers (design §2).
      */
     override fun onWifiReacquired(network: Network?) {
-        reacquiredNetwork = network
+        reacquiredNetwork.set(network)
         events.trySend(ConnEvent.LinkDropped("wifi re-acquired"))
+    }
+
+    /**
+     * Cancel the driver and BLOCK (bounded) until its `finally` — teardownInternal → `transport.close()` →
+     * `BikeWifi.leave()` — has run, so a connect that follows (mode switch) is strictly ordered after the Wi-Fi
+     * release (review I1). Called from the main thread at teardown; teardown does no network I/O so it returns
+     * in ms, and the timeout caps a wedged driver so we never hang the caller. The job is captured+cancelled
+     * under [lifecycleLock]; the join runs OUTSIDE the lock (the driver's own `connect`/`disconnect` also take
+     * it, so holding it during join could deadlock).
+     */
+    override fun disconnectAndAwaitTeardown() {
+        val job = synchronized(lifecycleLock) { runJob?.also { it.cancel() } } ?: return
+        runCatching { runBlocking { withTimeoutOrNull(TEARDOWN_AWAIT_MS) { job.join() } } }
     }
 
     /**
@@ -228,8 +247,8 @@ class DefaultBikeConnection(
                         // re-acquire handed us a fresh Network, swap it into the endpoint so establishAnyLink
                         // re-runs the prober on the LIVE net — a stale endpoint Network aborts
                         // EasyConnProber.start (null link props → "could not resolve our IPv4"), design §3.
-                        reacquiredNetwork?.let { fresh -> endpoint = endpoint?.copy(network = fresh) }
-                        reacquiredNetwork = null
+                        // getAndSet consumes it atomically so a concurrent re-acquire can't drop a fresh net (M1).
+                        reacquiredNetwork.getAndSet(null)?.let { fresh -> endpoint = endpoint?.copy(network = fresh) }
                         closeSession() // keep the transport (endpoint stays non-null) — re-establish the link only
                     }
                     is ConnEvent.TransportLost -> {

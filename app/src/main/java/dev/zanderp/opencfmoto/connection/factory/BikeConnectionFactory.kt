@@ -27,6 +27,19 @@ object BikeConnectionFactory {
     }
 
     /**
+     * Retry-parity caps by transport (flip-work-design.md §2): SoftAP/P2P get effectively-infinite caps so the
+     * daily-driver factory path matches classic's UNBOUNDED retry — an ended driver has no receiver for a later
+     * Wi-Fi re-acquire. PHONE_HOTSPOT (Rieju) keeps the DEFAULT caps: a one-shot BLE handoff with a manual
+     * fallback, not a daily-ride reconnect. Returns `(maxAttempts, flapMaxFailures)`. Pure/internal for testing.
+     */
+    internal fun retryCapsFor(mode: TransportKind): Pair<Int, Int> =
+        if (mode == TransportKind.SOFT_AP || mode == TransportKind.P2P) {
+            Int.MAX_VALUE to Int.MAX_VALUE
+        } else {
+            MAX_ATTEMPTS to FLAP_MAX_FAILURES
+        }
+
+    /**
      * Build a ready-to-drive connection for [qr]. Garage fast-path (Task 8): a remembered [ConnectionSpec]
      * for this bike skips re-detection (auto-vs-P2P racing, mode probing); a never-seen bike falls back to
      * deriving one fresh from the QR, same as before. Either way, [DefaultBikeConnection] saves the spec
@@ -35,19 +48,14 @@ object BikeConnectionFactory {
      */
     fun create(ctx: Context, qr: QrData, memory: BikeMemory, io: PlatformIO): BikeConnection {
         val spec = memory.specFor(ctx, qr) ?: ConnectionSpec.fromQr(qr)
-        // Reconnect parity (flip-work-design.md §2): the classic 450NK path retries FOREVER (BikeWifi keeps
-        // the WifiNetworkSpecifier request pending and re-grabs the AP the instant it returns), so the
-        // daily-driver SoftAP/P2P factory path must not self-terminate on a long outage or a flap — an ended
-        // driver has no receiver for a later re-acquire. PHONE_HOTSPOT (Rieju) keeps the default caps: a
-        // one-shot BLE handoff with a manual fallback, not a daily-ride reconnect.
-        val soft = spec.mode == TransportKind.SOFT_AP || spec.mode == TransportKind.P2P
+        val (maxAttempts, flapMax) = retryCapsFor(spec.mode)
         return DefaultBikeConnection(
             transport = selectTransport(spec),
             links = listOf(EasyConnBikeLink(), YunmoBikeLink()),
             spec = spec,
             io = io,
-            maxAttempts = if (soft) Int.MAX_VALUE else MAX_ATTEMPTS,
-            flapMaxFailures = if (soft) Int.MAX_VALUE else FLAP_MAX_FAILURES,
+            maxAttempts = maxAttempts,
+            flapMaxFailures = flapMax,
             onConnected = { saved ->
                 memory.saveSpec(ctx, saved)
                 // Record the REAL transport outcome (saveSpec no longer mirrors spec.mode — that was a

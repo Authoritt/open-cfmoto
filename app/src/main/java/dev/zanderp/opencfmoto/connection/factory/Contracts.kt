@@ -65,6 +65,15 @@ interface BikeConnection {
      * for connections with no bindable Network (P2P/phone-hotspot carry `network=null`).
      */
     fun onWifiReacquired(network: Network?)
+
+    /**
+     * Cancel AND wait (bounded) for teardown — `transport.close()` / `BikeWifi.leave()` — to finish, so a
+     * connect that follows (e.g. a mode switch) is strictly ordered AFTER the Wi-Fi release and cannot race a
+     * still-in-flight `leave()` that would null the just-started session's network. Unlike [disconnect] (fire-
+     * and-forget cancel), this returns only once the driver's `finally` has run. Teardown does no network I/O,
+     * so the wait is short; it must never block the caller unboundedly (`flip-work-design.md` §4 / review I1).
+     */
+    fun disconnectAndAwaitTeardown()
 }
 
 /** A live link-layer session (EasyConn/Yunmo) established over a [BikeEndpoint]. */

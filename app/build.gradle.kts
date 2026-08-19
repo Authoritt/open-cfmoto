@@ -77,6 +77,13 @@ android {
         compose = true
     }
 
+    testOptions {
+        // Let plain-JVM unit tests hold an android.jar type as an inert pass-through (e.g. a Context the
+        // fakes never call methods on) instead of every stub throwing "Stub!". Enables the factory-driver
+        // MECHANISM tests (DefaultBikeConnectionTest re-establish) to reach Connected without Robolectric.
+        unitTests.isReturnDefaultValues = true
+    }
+
     // Wireless Android Auto needs the packaged aa_privkey (same as prior releases).
     lint {
         disable += "PackagedPrivateKey"

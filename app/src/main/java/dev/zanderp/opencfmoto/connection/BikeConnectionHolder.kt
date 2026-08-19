@@ -19,24 +19,28 @@ object BikeConnectionHolder {
     var connection: BikeConnection? = null
         private set
 
-    /** Replace any prior live connection (defensive: callers always tear down first). */
+    /** Replace any prior live connection (defensive: callers always tear down first); await the prior's release. */
     fun set(c: BikeConnection) {
         val prev = connection
         connection = c
-        prev?.disconnect()
+        prev?.disconnectAndAwaitTeardown()
     }
 
     /**
-     * Idempotent teardown: null FIRST (a concurrent classic callback then sees "no factory"), then disconnect
-     * the captured handle. No-op when null ⇒ the toggle-OFF classic path is unaffected.
+     * Idempotent teardown: null FIRST (a concurrent re-acquire — which fires on the BikeWifi ConnectivityThread,
+     * NOT the main looper — then sees "no factory"), then AWAIT the handle's teardown (transport.close() →
+     * BikeWifi.leave()) so a connect that FOLLOWS (e.g. a mode switch) is strictly ordered after the Wi-Fi
+     * release and can't race an in-flight leave() that would null the just-started session (review I1). No-op
+     * when null ⇒ the OFF/classic path is unaffected (byte-for-byte).
      */
     fun disconnectAndClear() {
         val c = connection
         connection = null
-        c?.disconnect()
+        c?.disconnectAndAwaitTeardown()
     }
 
-    /** SoftAP re-acquire hinge (design §2): drive the live factory connection's own re-establish. No-op when null. */
+    /** SoftAP re-acquire hinge (design §2): drive the live factory connection's own re-establish. No-op when
+     *  null. This is the single path `BikeLink.onWifiReacquired`'s fork calls (review M4). */
     fun onWifiReacquired(network: Network?) {
         connection?.onWifiReacquired(network)
     }

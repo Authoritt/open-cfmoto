@@ -2,6 +2,9 @@ package dev.zanderp.opencfmoto.connection.factory
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import java.net.Inet4Address
+import java.net.InetAddress
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -54,7 +57,44 @@ class DefaultBikeConnectionTest {
         override fun videoSink(): VideoSink = throw IllegalStateException("no video sink in unit test")
     }
 
+    // --- Success fakes for the re-establish MECHANISM test (review I2). Reaching Connected needs a Context
+    //     argument for transport.open/link.establish; the fakes never call a method on it, and
+    //     testOptions.unitTests.isReturnDefaultValues (build.gradle.kts) lets ContextWrapper(null) be an inert
+    //     pass-through instead of a "Stub!" throw — no Robolectric/mocking on the classpath. ---
+    private class OpeningTransport(private val ep: BikeEndpoint) : BikeTransport {
+        @Volatile var opened = 0
+        @Volatile var closed = 0
+        override suspend fun open(ctx: Context, spec: ConnectionSpec, io: PlatformIO): BikeEndpoint { opened++; return ep }
+        override fun close() { closed++ }
+    }
+
+    private class EstablishingLink : BikeLink {
+        @Volatile var established = 0
+        @Volatile var lastEndpoint: BikeEndpoint? = null
+        override suspend fun establish(ctx: Context, endpoint: BikeEndpoint, spec: ConnectionSpec, io: PlatformIO): LinkSession {
+            established++
+            lastEndpoint = endpoint
+            return object : LinkSession { override fun close() {} }
+        }
+        override fun stop() {}
+    }
+
+    private object ContextIo : PlatformIO {
+        override val appContext: Context = ContextWrapper(null) // inert token; no methods are ever called on it
+        override val log: (String, String) -> Unit = { _, _ -> }
+        override fun activityOrNull(): Activity? = null
+        override fun videoSink(): VideoSink = throw IllegalStateException("no video sink in unit test")
+    }
+
     private fun softApSpec() = ConnectionSpec(bikeId = "test-bike", mode = TransportKind.SOFT_AP)
+
+    private fun softApEndpoint() = BikeEndpoint(
+        network = null,
+        host = InetAddress.getByName("192.168.49.1") as Inet4Address,
+        bindIp = null,
+        kind = TransportKind.SOFT_AP,
+        phoneIsServer = false,
+    )
 
     // Block bodies (not `= runBlocking { ... }`): JUnit4 requires @Test methods to return void, and some of
     // these blocks end in a non-Unit expression (e.g. `first { ... }` returns a ConnState).
@@ -183,5 +223,36 @@ class DefaultBikeConnectionTest {
         conn.onWifiReacquired(null)
         conn.onWifiReacquired(null)
         assertEquals(ConnState.Idle, conn.state.value)
+    }
+
+    @Test
+    fun `onWifiReacquired re-establishes the LINK only (no transport re-open)`() {
+        // THE mechanism the feature hinges on (review I2): a Wi-Fi re-acquire must re-establish Layer 2 on the
+        // live network WITHOUT re-opening the transport (BikeWifi stays up). Drive to Connected, fire a
+        // re-acquire, and prove transport.open ran exactly once while link.establish ran again.
+        runBlocking {
+            val transport = OpeningTransport(softApEndpoint())
+            val link = EstablishingLink()
+            val conn = DefaultBikeConnection(
+                transport = transport,
+                links = listOf(link),
+                spec = softApSpec(),
+                io = ContextIo,
+            )
+            conn.connect()
+            withTimeout(5_000) { conn.state.first { it is ConnState.Connected } }
+            assertEquals("transport opens once", 1, transport.opened)
+            assertEquals("link establishes once", 1, link.established)
+
+            conn.onWifiReacquired(null) // Wi-Fi came back → LinkDropped → re-establish the link only
+            withTimeout(5_000) { while (link.established < 2) delay(20) }
+
+            assertEquals("transport must NOT be re-opened on a Wi-Fi re-acquire", 1, transport.opened)
+            assertTrue("link must be re-established (link-only recovery)", link.established >= 2)
+            assertEquals("transport stays up (not closed) during a link-only re-establish", 0, transport.closed)
+
+            conn.disconnect()
+            withTimeout(5_000) { conn.state.first { it == ConnState.Idle } }
+        }
     }
 }

@@ -22,12 +22,13 @@ class BikeConnectionHolderTest {
 
     private class FakeBikeConnection : BikeConnection {
         @Volatile var connects = 0
-        @Volatile var disconnects = 0
+        @Volatile var teardowns = 0
         @Volatile var reacquires = 0
         override val state: StateFlow<ConnState> = MutableStateFlow(ConnState.Idle)
         override fun connect() { connects++ }
-        override fun disconnect() { disconnects++ }
+        override fun disconnect() { /* the holder uses disconnectAndAwaitTeardown, not this (review I1) */ }
         override fun onWifiReacquired(network: Network?) { reacquires++ }
+        override fun disconnectAndAwaitTeardown() { teardowns++ }
     }
 
     @Before fun reset() = BikeConnectionHolder.disconnectAndClear()
@@ -39,22 +40,22 @@ class BikeConnectionHolderTest {
         assertSame(c, BikeConnectionHolder.connection)
     }
 
-    @Test fun `set replaces a prior connection and disconnects it`() {
+    @Test fun `set replaces a prior connection and tears it down (awaitable)`() {
         val prev = FakeBikeConnection()
         val next = FakeBikeConnection()
         BikeConnectionHolder.set(prev)
         BikeConnectionHolder.set(next)
         assertSame(next, BikeConnectionHolder.connection)
-        assertEquals("prior connection is disconnected on replace", 1, prev.disconnects)
-        assertEquals(0, next.disconnects)
+        assertEquals("prior connection is torn down (awaited) on replace", 1, prev.teardowns)
+        assertEquals(0, next.teardowns)
     }
 
-    @Test fun `disconnectAndClear disconnects the held connection and nulls it`() {
+    @Test fun `disconnectAndClear tears down the held connection (awaited) and nulls it`() {
         val c = FakeBikeConnection()
         BikeConnectionHolder.set(c)
         BikeConnectionHolder.disconnectAndClear()
         assertNull(BikeConnectionHolder.connection)
-        assertEquals(1, c.disconnects)
+        assertEquals(1, c.teardowns)
     }
 
     @Test fun `disconnectAndClear is a no-op when already null`() {
