@@ -66,8 +66,8 @@ object BikeConnectionFactory {
      *    learned per-bike winner — the CRITICAL bug: the owner's `DIRECT-go-CFMOTO-*` 450NK (learned winner
      *    `"AP"`) was stored/derived as P2P and re-tried P2P on every single ride.
      *
-     * A rider PIN is law and is never touched ([choice] != AUTO returns [stored] as-is): `RIEJU_BLE`
-     * deliberately forces PHONE_HOTSPOT even for a QR whose `modelid` isn't known
+     * A rider PIN is law and is never touched ([choice] != AUTO returns [stored] as-is):
+     * [ConnectorChoice.BLE] deliberately forces PHONE_HOTSPOT even for a QR whose `modelid` isn't known
      * (`BikeMemory.setConnectorChoice`).
      *
      * @param pref `AppSettings.transport` — the rider's Setup Wi-Fi preference.
@@ -87,15 +87,18 @@ object BikeConnectionFactory {
 
     /**
      * The rider-facing NAME of a connector — the very strings the Garage/Scan picker shows, so the failure
-     * message names the connector the way the rider chose it ("CFMoto Wi-Fi", "Hotspot manual", …) instead
-     * of an internal token.
+     * message blames the connector by the same MECHANISM name the rider chose it with ("SoftAP", "Hotspot",
+     * …) instead of an internal token or a brand.
+     *
+     * Mind the crossing (see `ConnectorChoice.forTransport`, the one place it is spelled out): the BLE
+     * mechanism is [TransportKind.PHONE_HOTSPOT] and the Hotspot mechanism is [TransportKind.TETHER].
      */
     @StringRes
     private fun connectorNameRes(mode: TransportKind): Int = when (mode) {
         TransportKind.SOFT_AP -> R.string.ovk_conn_softap
         TransportKind.P2P -> R.string.ovk_conn_p2p
-        TransportKind.PHONE_HOTSPOT -> R.string.ovk_conn_rieju
-        TransportKind.TETHER -> R.string.ovk_conn_tether
+        TransportKind.PHONE_HOTSPOT -> R.string.ovk_conn_ble
+        TransportKind.TETHER -> R.string.ovk_conn_hotspot
     }
 
     /**

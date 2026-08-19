@@ -724,33 +724,31 @@
     <string name="ovk_garage_conn_label">Connection</string>
     <string name="ovk_dlg_conn_title">How does %1$s connect?</string>
     <string name="ovk_garage_conn_subtitle">Auto-detected. Pin one here only if your bike needs a specific one.</string>
-    <string name="ovk_conn_detected">Detected: %1$s</string>
+    <!-- Named by MECHANISM, never by brand: a rider reads the badge on the bike, not the protocol, so a
+         brand label ("Rieju") on a mechanism sends working bikes of other brands to the wrong connector.
+         Brands live in the "?" sheet below, as tested-on evidence. -->
     <string name="ovk_conn_auto">Automatic</string>
-    <string name="ovk_conn_softap">CFMoto Wi-Fi</string>
-    <string name="ovk_conn_p2p">CFMoto Direct</string>
-    <string name="ovk_conn_rieju">Rieju</string>
-    <string name="ovk_conn_tether">Manual hotspot</string>
-    <string name="ovk_conn_opt_auto">Automatic (detected)</string>
-    <string name="ovk_conn_opt_softap">CFMoto Wi-Fi (SoftAP)</string>
-    <string name="ovk_conn_opt_p2p">CFMoto Direct (P2P)</string>
-    <string name="ovk_conn_opt_rieju">Rieju (Wi-Fi Direct + BLE)</string>
-    <string name="ovk_conn_softap_desc">The dash\'s own Wi-Fi network</string>
-    <string name="ovk_conn_p2p_desc">The dash\'s Wi-Fi Direct</string>
-    <string name="ovk_conn_rieju_desc">Wi-Fi Direct + Bluetooth</string>
-    <string name="ovk_conn_tether_desc">Share the phone\'s hotspot</string>
-    <!-- AUTO row detail: names the connector it actually picked (e.g. "Automatic · CFMoto Direct (P2P)") -->
-    <string name="ovk_conn_auto_detail">Automatic · %1$s (%2$s)</string>
+    <string name="ovk_conn_softap">SoftAP</string>
+    <string name="ovk_conn_p2p">P2P</string>
+    <string name="ovk_conn_ble">BLE</string>
+    <string name="ovk_conn_hotspot">Hotspot</string>
+    <string name="ovk_conn_auto_desc">The app picks the mechanism · now: %1$s</string>
+    <string name="ovk_conn_softap_desc">The dash creates the network and your phone joins it</string>
+    <string name="ovk_conn_p2p_desc">Wi-Fi Direct with the dash</string>
+    <string name="ovk_conn_ble_desc">Your phone creates the network and sends the password over Bluetooth</string>
+    <string name="ovk_conn_hotspot_desc">You turn your phone hotspot on and the dash joins it</string>
+    <!-- AUTO row detail: names the connector it actually picked (e.g. "Automatic · P2P") -->
+    <string name="ovk_conn_auto_detail">Automatic · %1$s</string>
     <!-- connector help sheet ("?" affordance next to the connector row / in the picker header) -->
     <string name="ovk_conn_help_title">How does your bike connect?</string>
     <string name="ovk_conn_help_softap_desc">The dash creates its own Wi-Fi network and your phone joins it.</string>
     <string name="ovk_conn_help_softap_tested">Tested on: CFMoto, Voge, Benelli, QJ, Morini and more</string>
     <string name="ovk_conn_help_p2p_desc">Wi-Fi Direct with the dash. Usually connects faster.</string>
     <string name="ovk_conn_help_p2p_tested">Tested on: CFMoto (DIRECT-… networks)</string>
-    <string name="ovk_conn_help_rieju_title">Rieju (Wi-Fi Direct + Bluetooth)</string>
-    <string name="ovk_conn_help_rieju_desc">Your phone creates the network and hands the dash the password over Bluetooth.</string>
-    <string name="ovk_conn_help_rieju_tested">⚠ New — not yet tested on a bike</string>
-    <string name="ovk_conn_help_tether_desc">Turn on your phone\'s hotspot and the dash joins it.</string>
-    <string name="ovk_conn_help_tether_tested">Tested on: Zontes</string>
+    <string name="ovk_conn_help_ble_desc">Your phone creates the network and hands the dash the password over Bluetooth.</string>
+    <string name="ovk_conn_help_ble_tested">⚠ New — not yet tested on a bike</string>
+    <string name="ovk_conn_help_hotspot_desc">Turn your phone hotspot on and the dash joins it.</string>
+    <string name="ovk_conn_help_hotspot_tested">Tested on: Zontes</string>
     <string name="ovk_conn_help_footer">If it won\'t connect, try a different connector from the Garage.</string>
     <!-- terminal connect failure: the connector saved in the Garage never established -->
     <string name="ovk_conn_failed_rescan">Couldn\'t connect with %1$s. Scan the bike\'s QR again to update the garage.</string>

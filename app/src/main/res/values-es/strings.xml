@@ -706,33 +706,29 @@
     <string name="ovk_garage_conn_label">Conexión</string>
     <string name="ovk_dlg_conn_title">¿Cómo se conecta %1$s?</string>
     <string name="ovk_garage_conn_subtitle">Se detecta sola. Fíjala aquí solo si tu moto necesita una en concreto.</string>
-    <string name="ovk_conn_detected">Detectado: %1$s</string>
+    <!-- Nombrados por MECANISMO, nunca por marca (las marcas van en la hoja "?" como evidencia). -->
     <string name="ovk_conn_auto">Automático</string>
-    <string name="ovk_conn_softap">CFMoto Wi-Fi</string>
-    <string name="ovk_conn_p2p">CFMoto Directo</string>
-    <string name="ovk_conn_rieju">Rieju</string>
-    <string name="ovk_conn_tether">Hotspot manual</string>
-    <string name="ovk_conn_opt_auto">Automático (detectado)</string>
-    <string name="ovk_conn_opt_softap">CFMoto Wi-Fi (SoftAP)</string>
-    <string name="ovk_conn_opt_p2p">CFMoto Directo (P2P)</string>
-    <string name="ovk_conn_opt_rieju">Rieju (Wi-Fi Direct + BLE)</string>
-    <string name="ovk_conn_softap_desc">La red Wi-Fi del propio tablero</string>
-    <string name="ovk_conn_p2p_desc">El Wi-Fi Directo del tablero</string>
-    <string name="ovk_conn_rieju_desc">Wi-Fi Directo + Bluetooth</string>
-    <string name="ovk_conn_tether_desc">Comparte el hotspot del teléfono</string>
+    <string name="ovk_conn_softap">SoftAP</string>
+    <string name="ovk_conn_p2p">P2P</string>
+    <string name="ovk_conn_ble">BLE</string>
+    <string name="ovk_conn_hotspot">Hotspot</string>
+    <string name="ovk_conn_auto_desc">La app elige el mecanismo · ahora: %1$s</string>
+    <string name="ovk_conn_softap_desc">El tablero crea la red y el teléfono se une</string>
+    <string name="ovk_conn_p2p_desc">Wi-Fi Directo con el tablero</string>
+    <string name="ovk_conn_ble_desc">El teléfono crea la red y pasa la clave por Bluetooth</string>
+    <string name="ovk_conn_hotspot_desc">Enciendes el hotspot del teléfono y el tablero se une</string>
     <!-- fila AUTO: nombra el conector que realmente usará (p.ej. "Automático · CFMoto Directo (P2P)") -->
-    <string name="ovk_conn_auto_detail">Automático · %1$s (%2$s)</string>
+    <string name="ovk_conn_auto_detail">Automático · %1$s</string>
     <!-- hoja de ayuda de conectores ("?" junto a la fila / en la cabecera del selector) -->
     <string name="ovk_conn_help_title">¿Cómo se conecta tu moto?</string>
     <string name="ovk_conn_help_softap_desc">El tablero crea su propia red Wi-Fi y el teléfono se une.</string>
     <string name="ovk_conn_help_softap_tested">Probado en: CFMoto, Voge, Benelli, QJ, Morini y más</string>
     <string name="ovk_conn_help_p2p_desc">Wi-Fi Directo con el tablero. Suele conectar más rápido.</string>
     <string name="ovk_conn_help_p2p_tested">Probado en: CFMoto (redes DIRECT-…)</string>
-    <string name="ovk_conn_help_rieju_title">Rieju (Wi-Fi Direct + Bluetooth)</string>
-    <string name="ovk_conn_help_rieju_desc">El teléfono crea la red y le pasa la clave al tablero por Bluetooth.</string>
-    <string name="ovk_conn_help_rieju_tested">⚠ Nuevo — aún sin probar en una moto</string>
-    <string name="ovk_conn_help_tether_desc">Enciendes el hotspot del teléfono y el tablero se une.</string>
-    <string name="ovk_conn_help_tether_tested">Probado en: Zontes</string>
+    <string name="ovk_conn_help_ble_desc">El teléfono crea la red y le pasa la clave al tablero por Bluetooth.</string>
+    <string name="ovk_conn_help_ble_tested">⚠ Nuevo — aún sin probar en una moto</string>
+    <string name="ovk_conn_help_hotspot_desc">Enciendes el hotspot del teléfono y el tablero se une.</string>
+    <string name="ovk_conn_help_hotspot_tested">Probado en: Zontes</string>
     <string name="ovk_conn_help_footer">Si no conecta, prueba con otro conector desde el Garaje.</string>
     <!-- fallo terminal de conexión: el conector guardado en el Garaje no logró establecerse -->
     <string name="ovk_conn_failed_rescan">No se pudo conectar con %1$s. Escanea el QR de la moto otra vez para actualizar el garaje.</string>

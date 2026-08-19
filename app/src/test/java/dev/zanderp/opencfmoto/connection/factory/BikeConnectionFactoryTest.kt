@@ -155,9 +155,9 @@ class BikeConnectionFactoryTest {
     }
 
     @Test fun `reconcileStoredMode never overrides a rider pin`() {
-        // RIEJU_BLE deliberately forces PHONE_HOTSPOT even for a QR whose modelid isn't known — a pin is law.
+        // BLE deliberately forces PHONE_HOTSPOT even for a QR whose modelid isn't known — a pin is law.
         val stored = ConnectionSpec(bikeId = "bike", mode = TransportKind.PHONE_HOTSPOT)
-        val out = BikeConnectionFactory.reconcileStoredMode(stored, qr(action = 128), ConnectorChoice.RIEJU_BLE)
+        val out = BikeConnectionFactory.reconcileStoredMode(stored, qr(action = 128), ConnectorChoice.BLE)
         assertEquals(TransportKind.PHONE_HOTSPOT, out.mode)
     }
 

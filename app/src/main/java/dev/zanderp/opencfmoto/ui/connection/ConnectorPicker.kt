@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Per-bike connection MECHANISM picker, shared by the Garage (durable home) and the Scan confirm step.
+// Per-bike connection MECHANISM picker, shared by the Garage (durable home) and the Scan step (where the
+// choice gets PROVEN). Every option is named by mechanism — SoftAP / P2P / BLE / Hotspot — never by brand.
 // Mirrors GarageScreen's ModeDialog/MapProviderDialog layout so the cockpit stays visually consistent.
 // The rider pins how a bike connects (or leaves it Automatic); persisted via BikeMemory.setConnectorChoice.
 package dev.zanderp.opencfmoto.ui.connection
@@ -41,58 +42,75 @@ import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 
-/** The rider-facing short label for a [ConnectorChoice] (the Garage tag / Scan affordance). */
+/**
+ * The rider-facing name of a [ConnectorChoice] — the MECHANISM, never a brand ("SoftAP", not "CFMoto
+ * Wi-Fi"). Used by the Garage tag, the Scan chips and the failure message the factory injects, so the
+ * connector the rider picks, the one the app blames and the one the "?" sheet documents are ONE name.
+ */
 @Composable
 fun connectorShortLabel(choice: ConnectorChoice): String = when (choice) {
     ConnectorChoice.AUTO -> stringResource(R.string.ovk_conn_auto)
     ConnectorChoice.SOFT_AP -> stringResource(R.string.ovk_conn_softap)
     ConnectorChoice.P2P -> stringResource(R.string.ovk_conn_p2p)
-    ConnectorChoice.RIEJU_BLE -> stringResource(R.string.ovk_conn_rieju)
-    ConnectorChoice.TETHER -> stringResource(R.string.ovk_conn_tether)
+    ConnectorChoice.BLE -> stringResource(R.string.ovk_conn_ble)
+    ConnectorChoice.HOTSPOT -> stringResource(R.string.ovk_conn_hotspot)
+}
+
+/** The one-line "what it is" for a [ConnectorChoice] — plain language, no jargon, no brand. */
+@Composable
+fun connectorDescription(choice: ConnectorChoice, detected: TransportKind): String = when (choice) {
+    ConnectorChoice.AUTO -> stringResource(R.string.ovk_conn_auto_desc, connectorNameForTransport(detected))
+    ConnectorChoice.SOFT_AP -> stringResource(R.string.ovk_conn_softap_desc)
+    ConnectorChoice.P2P -> stringResource(R.string.ovk_conn_p2p_desc)
+    ConnectorChoice.BLE -> stringResource(R.string.ovk_conn_ble_desc)
+    ConnectorChoice.HOTSPOT -> stringResource(R.string.ovk_conn_hotspot_desc)
 }
 
 /**
- * The auto-detected mechanism as a short, locale-independent token for the "detected: …" hint (e.g. "P2P").
- * Deliberately technical: it is a DETECTION RESULT shown as a hint, not one of the plain-language picker
- * options.
- */
-fun detectedTransportToken(mode: TransportKind): String = when (mode) {
-    TransportKind.SOFT_AP -> "SoftAP"
-    TransportKind.P2P -> "P2P"
-    TransportKind.PHONE_HOTSPOT -> "Hotspot"
-    TransportKind.TETHER -> "Tether"
-}
-
-/**
- * The rider-facing connector NAME for a detected [TransportKind] — the same plain-language names
- * [connectorShortLabel] uses for a pinned [ConnectorChoice], so an Automatic row can say which
- * connector it actually picked instead of leaving the rider to guess.
+ * The rider-facing connector NAME for a DETECTED [TransportKind] — the same mechanism names
+ * [connectorShortLabel] uses for a pinned [ConnectorChoice], so an Automatic row can say which connector it
+ * actually picked instead of leaving the rider to guess.
+ *
+ * Note the deliberate crossing: [TransportKind.PHONE_HOTSPOT] is the BLE mechanism (the phone hosts the
+ * network and passes the password over Bluetooth) and [TransportKind.TETHER] is the Hotspot mechanism (the
+ * rider switches the phone hotspot on). [TransportKind] is internal plumbing and keeps its own names;
+ * [ConnectorChoice.forTransport] is the single place the two vocabularies meet.
  */
 @Composable
-fun connectorNameForTransport(mode: TransportKind): String = when (mode) {
-    TransportKind.SOFT_AP -> stringResource(R.string.ovk_conn_softap)
-    TransportKind.P2P -> stringResource(R.string.ovk_conn_p2p)
-    TransportKind.PHONE_HOTSPOT -> stringResource(R.string.ovk_conn_rieju)
-    TransportKind.TETHER -> stringResource(R.string.ovk_conn_tether)
-}
+fun connectorNameForTransport(mode: TransportKind): String =
+    connectorShortLabel(ConnectorChoice.forTransport(mode))
 
 /**
- * The rider-facing connector row/tag text (Scan's confirm pill, Garage's per-bike tag). For
- * [ConnectorChoice.AUTO] this names the connector that will actually be used — e.g.
- * "Automatic · CFMoto Direct (P2P)" — because "Automatic" alone tells the rider nothing when a
- * connection fails. A pinned choice still shows just its own name, unchanged.
+ * The rider-facing connector row/tag text (Scan's pill, Garage's per-bike tag). For [ConnectorChoice.AUTO]
+ * this names the connector that will actually be used — e.g. "Automático · P2P" — because "Automático" alone
+ * tells the rider nothing when a connection fails. A pinned choice still shows just its own name, unchanged.
  */
 @Composable
 fun connectorRowLabel(choice: ConnectorChoice, detected: TransportKind): String =
     if (choice == ConnectorChoice.AUTO) {
-        stringResource(R.string.ovk_conn_auto_detail, connectorNameForTransport(detected), detectedTransportToken(detected))
+        stringResource(R.string.ovk_conn_auto_detail, connectorNameForTransport(detected))
     } else {
         connectorShortLabel(choice)
     }
 
 /**
+ * The connectors as the rider sees them, in picker order: the default first, then the four mechanisms.
+ * ONE list, so the Garage dialog and the Scan chips can never drift apart or hide a mechanism from one of
+ * the two places a rider looks for it.
+ */
+val CONNECTOR_OPTIONS: List<ConnectorChoice> = listOf(
+    ConnectorChoice.AUTO,
+    ConnectorChoice.SOFT_AP,
+    ConnectorChoice.P2P,
+    ConnectorChoice.BLE,
+    ConnectorChoice.HOTSPOT,
+)
+
+/**
  * Per-bike connection-mechanism picker. [current] highlights today's choice; [detected] is
- * `ConnectionSpec.fromQr(qr).mode`, surfaced on the Automatic row so the rider sees what AUTO would use.
+ * `BikeMemory.autoDetectedMode(qr)` — the connector AUTO really resolves to — surfaced on the
+ * Automatic row so the rider sees what AUTO would use. The rows come from [CONNECTOR_OPTIONS], so every
+ * mechanism is always offered, in one order, with one name.
  */
 @Composable
 fun ConnectorChoiceDialog(
@@ -103,7 +121,6 @@ fun ConnectorChoiceDialog(
     onDismiss: () -> Unit,
 ) {
     val c = LocalCockpitColors.current
-    val detectedToken = detectedTransportToken(detected)
     var showHelp by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onDismiss) {
         Surface(color = c.surface1, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, c.line)) {
@@ -117,31 +134,13 @@ fun ConnectorChoiceDialog(
                     ConnectorHelpButton(onClick = { showHelp = true })
                 }
                 Spacer(Modifier.size(4.dp))
-                ConnRow(
-                    stringResource(R.string.ovk_conn_opt_auto),
-                    stringResource(R.string.ovk_conn_detected, detectedToken),
-                    primary = current == ConnectorChoice.AUTO,
-                ) { onPick(ConnectorChoice.AUTO) }
-                ConnRow(
-                    stringResource(R.string.ovk_conn_opt_softap),
-                    stringResource(R.string.ovk_conn_softap_desc),
-                    primary = current == ConnectorChoice.SOFT_AP,
-                ) { onPick(ConnectorChoice.SOFT_AP) }
-                ConnRow(
-                    stringResource(R.string.ovk_conn_opt_p2p),
-                    stringResource(R.string.ovk_conn_p2p_desc),
-                    primary = current == ConnectorChoice.P2P,
-                ) { onPick(ConnectorChoice.P2P) }
-                ConnRow(
-                    stringResource(R.string.ovk_conn_opt_rieju),
-                    stringResource(R.string.ovk_conn_rieju_desc),
-                    primary = current == ConnectorChoice.RIEJU_BLE,
-                ) { onPick(ConnectorChoice.RIEJU_BLE) }
-                ConnRow(
-                    stringResource(R.string.ovk_conn_tether),
-                    stringResource(R.string.ovk_conn_tether_desc),
-                    primary = current == ConnectorChoice.TETHER,
-                ) { onPick(ConnectorChoice.TETHER) }
+                for (option in CONNECTOR_OPTIONS) {
+                    ConnRow(
+                        connectorShortLabel(option),
+                        connectorDescription(option, detected),
+                        primary = current == option,
+                    ) { onPick(option) }
+                }
             }
         }
     }
@@ -169,9 +168,9 @@ private fun ConnRow(title: String, subtitle: String, primary: Boolean, onClick: 
 }
 
 /**
- * Small "?" affordance that opens [ConnectorHelpDialog] (a plain-language explanation of the four
- * connectors). Shared by the Scan confirm row and [ConnectorChoiceDialog]'s header, so one
- * implementation covers both places a rider might wonder "what does this mean?".
+ * Small "?" affordance that opens [ConnectorHelpDialog] (what each mechanism is + which bikes it is proven
+ * on). Shared by the Scan row and [ConnectorChoiceDialog]'s header, so one implementation covers both
+ * places a rider might wonder "what does this mean?".
  */
 @Composable
 fun ConnectorHelpButton(onClick: () -> Unit) {
@@ -183,10 +182,10 @@ fun ConnectorHelpButton(onClick: () -> Unit) {
 }
 
 /**
- * "How does my bike connect?" sheet: the four connectors, each with a plain-language explanation and
- * which bikes it has been confirmed on. UI/copy only — no connection logic lives here. The Rieju row
- * is marked unproven ON PURPOSE (deliberate honesty, not a bug): only flip its "tested on" line once a
- * bike has actually confirmed it.
+ * "How does my bike connect?" sheet: the four mechanisms, each with a plain-language explanation and the
+ * brands/models it has been confirmed on. UI/copy only — no connection logic lives here. The BLE row is
+ * marked unproven ON PURPOSE (deliberate honesty, not a bug): only flip its "tested on" line once a bike has
+ * actually confirmed it.
  */
 @Composable
 fun ConnectorHelpDialog(onDismiss: () -> Unit) {
@@ -200,25 +199,25 @@ fun ConnectorHelpDialog(onDismiss: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     ConnectorHelpRow(
-                        stringResource(R.string.ovk_conn_opt_softap),
+                        stringResource(R.string.ovk_conn_softap),
                         stringResource(R.string.ovk_conn_help_softap_desc),
                         stringResource(R.string.ovk_conn_help_softap_tested),
                     )
                     ConnectorHelpRow(
-                        stringResource(R.string.ovk_conn_opt_p2p),
+                        stringResource(R.string.ovk_conn_p2p),
                         stringResource(R.string.ovk_conn_help_p2p_desc),
                         stringResource(R.string.ovk_conn_help_p2p_tested),
                     )
                     ConnectorHelpRow(
-                        stringResource(R.string.ovk_conn_help_rieju_title),
-                        stringResource(R.string.ovk_conn_help_rieju_desc),
-                        stringResource(R.string.ovk_conn_help_rieju_tested),
+                        stringResource(R.string.ovk_conn_ble),
+                        stringResource(R.string.ovk_conn_help_ble_desc),
+                        stringResource(R.string.ovk_conn_help_ble_tested),
                         warnTested = true,
                     )
                     ConnectorHelpRow(
-                        stringResource(R.string.ovk_conn_tether),
-                        stringResource(R.string.ovk_conn_help_tether_desc),
-                        stringResource(R.string.ovk_conn_help_tether_tested),
+                        stringResource(R.string.ovk_conn_hotspot),
+                        stringResource(R.string.ovk_conn_help_hotspot_desc),
+                        stringResource(R.string.ovk_conn_help_hotspot_tested),
                     )
                 }
                 Text(stringResource(R.string.ovk_conn_help_footer), color = c.inkDim, fontSize = 11.5.sp)
@@ -228,9 +227,9 @@ fun ConnectorHelpDialog(onDismiss: () -> Unit) {
 }
 
 /**
- * One connector's plain-language row in [ConnectorHelpDialog]: what it does + which bikes confirmed
- * it. [warnTested] renders the "tested on" line in the theme's warning accent (never a raw red/[c.fault])
- * — used for Rieju's honest "not yet tested on a bike" line, which is deliberate, not an error state.
+ * One connector's plain-language row in [ConnectorHelpDialog]: what it does + which bikes confirmed it.
+ * [warnTested] renders the "tested on" line in the theme's warning accent (never a raw red/[c.fault]) — used
+ * for BLE's honest "not yet tested on a bike" line, which is deliberate, not an error state.
  */
 @Composable
 private fun ConnectorHelpRow(title: String, desc: String, tested: String, warnTested: Boolean = false) {

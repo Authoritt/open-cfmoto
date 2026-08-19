@@ -141,11 +141,11 @@ class BikeMemoryTest {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 128, ssid = "", mac = "AA:AA:AA:AA:AA:AA")
 
-        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.HOTSPOT)
 
-        assertEquals(ConnectorChoice.TETHER, BikeMemory.connectorChoice(prefs, q))
+        assertEquals(ConnectorChoice.HOTSPOT, BikeMemory.connectorChoice(prefs, q))
         assertEquals(TransportKind.TETHER, BikeMemory.specFor(prefs, q)?.mode)
-        assertEquals("the pin is stored under the mac, not the (blank) ssid", "TETHER", prefs.getString("connector_AA:AA:AA:AA:AA:AA", null))
+        assertEquals("the pin is stored under the mac, not the (blank) ssid", "HOTSPOT", prefs.getString("connector_AA:AA:AA:AA:AA:AA", null))
     }
 
     @Test fun `setConnectorChoice with NO stable id at all (no mac, no ssid) is still a no-op`() {
@@ -162,6 +162,90 @@ class BikeMemoryTest {
         prefs.edit().putString("connector_CFMOTO-1234", "P2P").apply()
 
         assertEquals(ConnectorChoice.P2P, BikeMemory.connectorChoice(prefs, q))
+    }
+
+    // ---- MIGRATION: the connectors were renamed from brand/plumbing names to MECHANISM names ----
+    // `connector_<bikeId>` holds a bare enum NAME, so the rename RIEJU_BLE→BLE / TETHER→HOTSPOT is a data
+    // migration: without ConnectorChoice.fromStoredName, `valueOf` throws on the old string and every rider
+    // who had deliberately pinned one of those two connectors is silently reset to AUTO on upgrade — their
+    // bike starts guessing again, with nothing on screen to explain why.
+
+    @Test fun `a pin stored by the OLD build as RIEJU_BLE reads back as BLE (no silent reset to AUTO)`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 128, ssid = "", mac = "AA:AA:AA:AA:AA:AA")
+        val id = ConnectionSpec.bikeIdFor(q)
+        // Verbatim what a build ≤ 2.0.13-pre wrote when the rider pinned the (then brand-named) connector.
+        prefs.edit().putString("connector_$id", "RIEJU_BLE").apply()
+
+        assertEquals(ConnectorChoice.BLE, BikeMemory.connectorChoice(prefs, q))
+    }
+
+    @Test fun `a pin stored by the OLD build as TETHER reads back as HOTSPOT (no silent reset to AUTO)`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 128, ssid = "", mac = "BB:BB:BB:BB:BB:BB")
+        val id = ConnectionSpec.bikeIdFor(q)
+        prefs.edit().putString("connector_$id", "TETHER").apply()
+
+        assertEquals(ConnectorChoice.HOTSPOT, BikeMemory.connectorChoice(prefs, q))
+    }
+
+    @Test fun `a legacy pin migrates under the LEGACY ssid key too (old name AND old key at once)`() {
+        val prefs = FakeSharedPreferences()
+        // The worst upgrade case: a bike with BOTH a mac and an ssid, pinned by a build that keyed the index
+        // by ssid AND named the connector by brand. Both migrations have to fire for the pin to survive.
+        val q = qr(action = 1, ssid = "CFMOTO-1234", mac = "AA:AA:AA:AA:AA:AA")
+        prefs.edit().putString("connector_CFMOTO-1234", "RIEJU_BLE").apply()
+
+        assertEquals(ConnectorChoice.BLE, BikeMemory.connectorChoice(prefs, q))
+    }
+
+    @Test fun `the unchanged names (AUTO, SOFT_AP, P2P) still read back verbatim`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234")
+        val id = ConnectionSpec.bikeIdFor(q)
+        for ((stored, expected) in listOf(
+            "AUTO" to ConnectorChoice.AUTO,
+            "SOFT_AP" to ConnectorChoice.SOFT_AP,
+            "P2P" to ConnectorChoice.P2P,
+        )) {
+            prefs.edit().putString("connector_$id", stored).apply()
+            assertEquals(expected, BikeMemory.connectorChoice(prefs, q))
+        }
+    }
+
+    @Test fun `a corrupt stored connector name still falls back to AUTO instead of throwing`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234")
+        prefs.edit().putString("connector_${ConnectionSpec.bikeIdFor(q)}", "WHATEVER").apply()
+
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, q))
+    }
+
+    @Test fun `today's writer round-trips through the migrating reader (BLE and HOTSPOT)`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 128, ssid = "", mac = "CC:CC:CC:CC:CC:CC")
+        val id = ConnectionSpec.bikeIdFor(q)
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.BLE)
+        assertEquals("the NEW name is what gets written", "BLE", prefs.getString("connector_$id", null))
+        assertEquals(ConnectorChoice.BLE, BikeMemory.connectorChoice(prefs, q))
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.HOTSPOT)
+        assertEquals("HOTSPOT", prefs.getString("connector_$id", null))
+        assertEquals(ConnectorChoice.HOTSPOT, BikeMemory.connectorChoice(prefs, q))
+    }
+
+    @Test fun `a legacy pin still forces its transport on the connect path (spec mode after a re-pin)`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 128, ssid = "", mac = "AA:AA:AA:AA:AA:AA")
+        prefs.edit().putString("connector_${ConnectionSpec.bikeIdFor(q)}", "TETHER").apply()
+
+        // The migrated choice must map to the SAME transport the old name did (HOTSPOT → TransportKind.TETHER),
+        // which is what BikeConnectionFactory.selectTransport reads.
+        val migrated = BikeMemory.connectorChoice(prefs, q)
+        BikeMemory.setConnectorChoice(prefs, q, migrated)
+
+        assertEquals(TransportKind.TETHER, BikeMemory.specFor(prefs, q)?.mode)
     }
 
     @Test fun `setConnectorChoice(SOFT_AP) forces the stored spec mode to SOFT_AP`() {
@@ -185,34 +269,34 @@ class BikeMemoryTest {
         assertEquals(TransportKind.P2P, BikeMemory.specFor(prefs, q)?.mode)
     }
 
-    @Test fun `setConnectorChoice(RIEJU_BLE) forces PHONE_HOTSPOT even for a SoftAP QR (deliberate override)`() {
+    @Test fun `setConnectorChoice(BLE) forces PHONE_HOTSPOT even for a SoftAP QR (deliberate override)`() {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 1, ssid = "CFMOTO-1234") // a plain SoftAP QR, not phone-hotspot-shaped
 
-        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.RIEJU_BLE)
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.BLE)
 
         assertEquals(TransportKind.PHONE_HOTSPOT, BikeMemory.specFor(prefs, q)?.mode)
-        assertEquals(ConnectorChoice.RIEJU_BLE, BikeMemory.connectorChoice(prefs, q))
+        assertEquals(ConnectorChoice.BLE, BikeMemory.connectorChoice(prefs, q))
     }
 
-    @Test fun `setConnectorChoice(TETHER) forces the stored spec mode to TETHER (keeping the rest)`() {
+    @Test fun `setConnectorChoice(HOTSPOT) forces the stored spec mode to TETHER (keeping the rest)`() {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 1, ssid = "CFMOTO-1234") // a plain SoftAP QR — the pin must override detection
         BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(q).copy(lastEndpointHint = "192.168.1.9"))
         assertEquals(TransportKind.SOFT_AP, ConnectionSpec.fromQr(q).mode) // guard the premise
 
-        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.HOTSPOT)
 
-        assertEquals(ConnectorChoice.TETHER, BikeMemory.connectorChoice(prefs, q))
+        assertEquals(ConnectorChoice.HOTSPOT, BikeMemory.connectorChoice(prefs, q))
         // TETHER is a real TransportKind now: the factory selects TetherTransport by spec.mode.
         assertEquals(TransportKind.TETHER, BikeMemory.specFor(prefs, q)?.mode)
         assertEquals("192.168.1.9", BikeMemory.specFor(prefs, q)?.lastEndpointHint)
     }
 
-    @Test fun `setConnectorChoice(AUTO) after TETHER resets the spec mode to the auto-detected one`() {
+    @Test fun `setConnectorChoice(AUTO) after HOTSPOT resets the spec mode to the auto-detected one`() {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 1, ssid = "CFMOTO-1234")
-        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.HOTSPOT)
         assertEquals(TransportKind.TETHER, BikeMemory.specFor(prefs, q)?.mode)
 
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.AUTO)
@@ -340,10 +424,10 @@ class BikeMemoryTest {
         assertEquals("guard the premise — no real ssid, the id keys by mac", q.mac, id)
         assertTrue("guard the premise — ssid is a synthetic placeholder, never truly blank", q.ssid.isNotBlank())
 
-        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.RIEJU_BLE) // writes spec_<mac> + connector_<mac>
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.BLE) // writes spec_<mac> + connector_<mac>
         BikeMemory.setWinningTransport(prefs, q.ssid, "AP") // transport_<synthetic ssid>
         BikeMemory.setBikeMode(prefs, q.ssid, "CFMOTO") // mode_<synthetic ssid>
-        assertEquals("RIEJU_BLE", prefs.getString("connector_$id", null))
+        assertEquals("BLE", prefs.getString("connector_$id", null))
 
         BikeMemory.remove(prefs, raw)
 

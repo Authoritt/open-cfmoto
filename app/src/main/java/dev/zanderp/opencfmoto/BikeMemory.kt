@@ -291,6 +291,10 @@ object BikeMemory {
      * [ConnectionSpec.bikeIdFor] key [setConnectorChoice] writes — mac when the QR has one, else ssid — so a
      * blank-ssid phone-hotspot bike can hold a pin like any other. AUTO ⇒ the auto-detect path runs
      * byte-for-byte.
+     *
+     * The stored value is an enum NAME, so it is decoded through [ConnectorChoice.fromStoredName] — which
+     * also maps the names builds ≤ 2.0.13-pre wrote (`RIEJU_BLE`, `TETHER`) onto today's mechanism names.
+     * A bare `valueOf` would throw on those and silently reset the rider's pin to AUTO.
      */
     fun connectorChoice(ctx: Context, qr: QrData): ConnectorChoice = connectorChoice(prefs(ctx), qr)
 
@@ -305,14 +309,14 @@ object BikeMemory {
             ?: qr.ssid.takeIf { it.isNotBlank() && it != id }
                 ?.let { prefs.getString("$KEY_CONNECTOR_PREFIX$it", null) }
             ?: return ConnectorChoice.AUTO
-        return runCatching { ConnectorChoice.valueOf(raw) }.getOrDefault(ConnectorChoice.AUTO)
+        return ConnectorChoice.fromStoredName(raw) ?: ConnectorChoice.AUTO
     }
 
     /**
      * Set (or clear, with [ConnectorChoice.AUTO]) the per-bike connection mechanism for the bike [qr]
      * identifies. Takes the whole [QrData] — not just an ssid — because an explicit connector must ALSO be
      * reflected into the stored [ConnectionSpec.mode] (what `BikeConnectionFactory.selectTransport` reads):
-     * SOFT_AP→SOFT_AP, P2P→P2P, RIEJU_BLE→PHONE_HOTSPOT, TETHER→TETHER, reusing the bike's existing spec so a
+     * SOFT_AP→SOFT_AP, P2P→P2P, BLE→PHONE_HOTSPOT, HOTSPOT→TETHER, reusing the bike's existing spec so a
      * learned `lastEndpointHint`/`defaultMapProvider` survives. AUTO clears the override by resetting
      * `spec.mode` back to what auto-detection says today ([ConnectionSpec.detectedAtPairing], the pairing
      * decision) so detection runs fresh again.
@@ -332,13 +336,17 @@ object BikeMemory {
         if (id.isBlank()) return
         prefs.edit().putString("$KEY_CONNECTOR_PREFIX$id", choice.name).apply()
         // Reflect the choice in spec.mode so the factory picks the forced transport. All four connectors
-        // force their transport (TETHER included, now that it is a real TransportKind with its own factory
-        // transport); AUTO resets to the auto-detected mode to genuinely clear a prior override.
+        // force their transport (HOTSPOT included, now that TransportKind.TETHER is a real kind with its own
+        // factory transport); AUTO resets to the auto-detected mode to genuinely clear a prior override.
+        // NOTE the deliberate crossing of names: the rider-facing BLE connector is TransportKind.PHONE_HOTSPOT
+        // (phone hosts the net, creds over Bluetooth) and the rider-facing HOTSPOT connector is
+        // TransportKind.TETHER (rider turns the Android hotspot on). TransportKind is internal plumbing and
+        // is persisted inside the spec JSON by name, so it keeps its own names.
         val forcedMode: TransportKind = when (choice) {
             ConnectorChoice.SOFT_AP -> TransportKind.SOFT_AP
             ConnectorChoice.P2P -> TransportKind.P2P
-            ConnectorChoice.RIEJU_BLE -> TransportKind.PHONE_HOTSPOT
-            ConnectorChoice.TETHER -> TransportKind.TETHER
+            ConnectorChoice.BLE -> TransportKind.PHONE_HOTSPOT
+            ConnectorChoice.HOTSPOT -> TransportKind.TETHER
             ConnectorChoice.AUTO -> autoDetected(prefs, qr).mode
         }
         val base = specFor(prefs, qr) ?: autoDetected(prefs, qr)

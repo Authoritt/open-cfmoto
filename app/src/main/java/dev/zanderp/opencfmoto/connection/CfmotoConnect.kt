@@ -249,13 +249,13 @@ object CfmotoConnect {
         // BikeConnectionFactory.
         val choice = if (!gateOnAaSteady && preferFactory) BikeMemory.connectorChoice(context, qr) else ConnectorChoice.AUTO
         when (choice) {
-            ConnectorChoice.SOFT_AP, ConnectorChoice.P2P, ConnectorChoice.RIEJU_BLE, ConnectorChoice.TETHER -> {
+            ConnectorChoice.SOFT_AP, ConnectorChoice.P2P, ConnectorChoice.BLE, ConnectorChoice.HOTSPOT -> {
                 // Both phone-hosts-the-network connectors need an Activity (BLE handoff / assist dialog +
                 // system tethering settings) — refuse headless with the SAME state + message the AUTO
                 // branches below set, so a background auto-connect on a pinned bike is explainable instead
                 // of dying inside the driver's foreground gate with no rider-visible reason.
                 if (activity == null &&
-                    (choice == ConnectorChoice.RIEJU_BLE || choice == ConnectorChoice.TETHER)
+                    (choice == ConnectorChoice.BLE || choice == ConnectorChoice.HOTSPOT)
                 ) {
                     LogBus.log("→ pinned '$choice' phone-hotspot bike can't auto-connect in the background — open the app to connect")
                     ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
