@@ -4,9 +4,11 @@
 package dev.zanderp.opencfmoto.connection.factory
 
 import android.content.Context
+import androidx.annotation.StringRes
 import dev.zanderp.opencfmoto.AppSettings
 import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.QrData
+import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.WifiTransport
 import dev.zanderp.opencfmoto.connection.factory.link.EasyConnBikeLink
 import dev.zanderp.opencfmoto.connection.factory.link.YunmoBikeLink
@@ -31,24 +33,24 @@ object BikeConnectionFactory {
     }
 
     /**
-     * Retry caps by transport — **FINITE for every kind**, returning `(maxAttempts, flapMaxFailures)`.
+     * Retry caps by transport — **FINITE for every kind**, returning `(maxReconnectAttempts, flapMaxFailures)`.
+     *
+     * These caps bound the RECONNECT class only — a link that was alive and got LOST (`reduce`'s two failure
+     * classes), retried on the SAME connector and shown to the rider as "Reconectando 1/3". A connector that
+     * never established does not reach them at all: it fails on the FIRST attempt with no backoff, because
+     * the connector is a Garage setting and a wrong one is fixed by re-scanning.
      *
      * SoftAP/P2P previously got `Int.MAX_VALUE` "for parity with classic's unbounded retry". That premise was
-     * WRONG, and it turned the CRITICAL mis-selection bug into an un-escapable one: classic's unbounded retry
-     * is unbounded **SoftAP** retry, reached only AFTER a fast (~6 s) P2P bail-out, never unbounded retry on
-     * the transport that cannot work. With the connector now DECIDED ONCE at pairing and used verbatim (no
-     * cascade — see [detectedAtPairing]), an infinite cap on the wrong connector means a bike that retries
-     * forever in silence, wedging `ConnectionState` in a busy phase and latching auto-connect OFF.
+     * WRONG: classic's unbounded retry is unbounded **SoftAP** retry, reached only AFTER a fast (~6 s) P2P
+     * bail-out, never unbounded retry on the transport that cannot work. Infinite caps here meant a bike that
+     * retried in silence, wedging `ConnectionState` in a busy phase and latching auto-connect OFF.
      *
-     * The rule instead: a connect that cannot succeed must fail BOUNDED and VISIBLY — terminal
-     * [ConnState.Error] (mirrored into the legacy `ConnectionState`, so auto-connect re-arms) carrying the
-     * connector worth recommending ([suggestAlternativeConnector]). Written as an exhaustive `when` on
-     * purpose: a future transport kind must DECIDE its retry policy here, not inherit one from an `else`.
-     * Pure/internal for testing.
+     * Written as an exhaustive `when` on purpose: a future transport kind must DECIDE its retry policy here,
+     * not inherit one from an `else`. Pure/internal for testing.
      */
     internal fun retryCapsFor(mode: TransportKind): Pair<Int, Int> = when (mode) {
-        TransportKind.SOFT_AP, TransportKind.P2P -> MAX_ATTEMPTS to FLAP_MAX_FAILURES
-        TransportKind.PHONE_HOTSPOT, TransportKind.TETHER -> MAX_ATTEMPTS to FLAP_MAX_FAILURES
+        TransportKind.SOFT_AP, TransportKind.P2P -> RECONNECT_MAX_ATTEMPTS to FLAP_MAX_FAILURES
+        TransportKind.PHONE_HOTSPOT, TransportKind.TETHER -> RECONNECT_MAX_ATTEMPTS to FLAP_MAX_FAILURES
     }
 
     /**
@@ -84,6 +86,19 @@ object BikeConnectionFactory {
     }
 
     /**
+     * The rider-facing NAME of a connector — the very strings the Garage/Scan picker shows, so the failure
+     * message names the connector the way the rider chose it ("CFMoto Wi-Fi", "Hotspot manual", …) instead
+     * of an internal token.
+     */
+    @StringRes
+    private fun connectorNameRes(mode: TransportKind): Int = when (mode) {
+        TransportKind.SOFT_AP -> R.string.ovk_conn_softap
+        TransportKind.P2P -> R.string.ovk_conn_p2p
+        TransportKind.PHONE_HOTSPOT -> R.string.ovk_conn_rieju
+        TransportKind.TETHER -> R.string.ovk_conn_tether
+    }
+
+    /**
      * The learned winner to feed the AUTO refinement, or null. Mirrors classic `joinWifi` EXACTLY: the
      * per-bike winner index refines [WifiTransport.AUTO] only — an explicit `AP`/`P2P` in Setup is the
      * rider's call and no memory may override it.
@@ -111,16 +126,21 @@ object BikeConnectionFactory {
         val spec = memory.specFor(ctx, qr)
             ?.let { reconcileStoredMode(it, qr, choice, pref, remembered) }
             ?: ConnectionSpec.detectedAtPairing(qr, pref, remembered)
-        val (maxAttempts, flapMax) = retryCapsFor(spec.mode)
+        val (maxReconnects, flapMax) = retryCapsFor(spec.mode)
         return DefaultBikeConnection(
             transport = selectTransport(spec),
             links = listOf(EasyConnBikeLink(), YunmoBikeLink()),
             spec = spec,
             io = io,
-            maxAttempts = maxAttempts,
+            maxReconnectAttempts = maxReconnects,
             flapMaxFailures = flapMax,
-            // Advice for the rider if this connector fails — never acted on here (no cascade, §1b).
-            alternative = suggestAlternativeConnector(qr, spec.mode),
+            // Rider-facing text for a connector that never establishes: the Garage entry is wrong, and the
+            // fix is a re-scan — NOT a retry and NOT another connector. Localized here because this is the
+            // only layer with a Context (the factory package stays free of Android resources).
+            initialFailureReason = ctx.getString(
+                R.string.ovk_conn_failed_rescan,
+                ctx.getString(connectorNameRes(spec.mode)),
+            ),
             onConnected = { saved ->
                 memory.saveSpec(ctx, saved)
                 // Record the REAL transport outcome (saveSpec no longer mirrors spec.mode — that was a

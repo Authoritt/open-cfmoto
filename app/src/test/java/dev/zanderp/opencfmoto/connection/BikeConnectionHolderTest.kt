@@ -1,10 +1,20 @@
 package dev.zanderp.opencfmoto.connection
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.net.Network
 import dev.zanderp.opencfmoto.ConnectionState
 import dev.zanderp.opencfmoto.Phase
 import dev.zanderp.opencfmoto.connection.factory.BikeConnection
+import dev.zanderp.opencfmoto.connection.factory.BikeEndpoint
+import dev.zanderp.opencfmoto.connection.factory.BikeTransport
 import dev.zanderp.opencfmoto.connection.factory.ConnState
+import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
+import dev.zanderp.opencfmoto.connection.factory.DefaultBikeConnection
+import dev.zanderp.opencfmoto.connection.factory.PlatformIO
+import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.VideoSink
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.After
@@ -46,6 +56,9 @@ class BikeConnectionHolderTest {
         ConnectionState.set(Phase.IDLE, "")
     }
 
+    /** Stand-in for the localized `ovk_conn_failed_rescan` text `BikeConnectionFactory` injects. */
+    private val RESCAN = "No se pudo conectar con CFMoto Wi-Fi. Escanea el QR de la moto otra vez para actualizar el garaje."
+
     /** The mirror collector runs on a background dispatcher — poll briefly instead of sleeping blind. */
     private fun awaitPhase(expected: Phase, timeoutMs: Long = 3_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
@@ -85,16 +98,29 @@ class BikeConnectionHolderTest {
         assertNull(BikeConnectionHolder.connection)
     }
 
-    @Test fun `onWifiReacquired forwards to the held connection`() {
+    @Test fun `onWifiReacquired forwards to the held connection and reports it took it`() {
         val c = FakeBikeConnection()
         BikeConnectionHolder.set(c)
-        BikeConnectionHolder.onWifiReacquired(null)
+        assertEquals(true, BikeConnectionHolder.onWifiReacquired(null))
         assertEquals(1, c.reacquires)
     }
 
     @Test fun `onWifiReacquired is a no-op when no factory connection is live`() {
-        BikeConnectionHolder.onWifiReacquired(null) // null holder → inert, no throw (classic path owns reconnect)
+        // null holder → inert, no throw, and it reports false so the classic prober handles the re-acquire.
+        assertEquals(false, BikeConnectionHolder.onWifiReacquired(null))
         assertNull(BikeConnectionHolder.connection)
+    }
+
+    @Test fun `onWifiReacquired hands a DEAD (terminal Error) driver's re-acquire back to the classic path`() {
+        // A driver that already ended in a terminal Error has no receiver for the event — its channel is
+        // never drained again — so forwarding would silently swallow the Wi-Fi re-acquire. Reachable now
+        // that an initial-connect failure is terminal on the first attempt.
+        val c = FakeBikeConnection()
+        BikeConnectionHolder.set(c)
+        c.emit(ConnState.Error("connector never established", recoverable = false))
+
+        assertEquals(false, BikeConnectionHolder.onWifiReacquired(null))
+        assertEquals("the dead driver must not be handed the event", 0, c.reacquires)
     }
 
     // ---- Terminal factory states must reach the legacy ConnectionState, or auto-connect latches OFF ----
@@ -148,6 +174,40 @@ class BikeConnectionHolderTest {
         Thread.sleep(150)
 
         assertEquals(Phase.STREAMING, ConnectionState.phase)
+    }
+
+    /**
+     * END-TO-END for the fast-fail: a REAL [DefaultBikeConnection] whose connector never establishes must
+     * clear the busy phase `joinWifi` set, or `CfmotoConnect.autoConnectAllowed` keeps refusing and both
+     * auto-connect paths stay dead. This is the combination that matters now that an initial-connect failure
+     * is terminal on the first attempt (no retry loop keeping the phase "meaningfully" busy).
+     */
+    @Test fun `a fast-failing factory connection clears the busy phase and shows the re-scan text`() {
+        val failing = object : BikeTransport {
+            override suspend fun open(ctx: Context, spec: ConnectionSpec, io: PlatformIO): BikeEndpoint =
+                throw IllegalStateException("SoftAP join failed")
+            override fun close() {}
+        }
+        val conn = DefaultBikeConnection(
+            transport = failing,
+            links = emptyList(),
+            spec = ConnectionSpec(bikeId = "b", mode = TransportKind.SOFT_AP),
+            io = object : PlatformIO {
+                override val appContext: Context = ContextWrapper(null) // inert; no method is ever called
+                override val log: (String, String) -> Unit = { _, _ -> }
+                override fun activityOrNull(): Activity? = null
+                override fun videoSink(): VideoSink = throw IllegalStateException("not used")
+            },
+            initialFailureReason = RESCAN,
+        )
+
+        ConnectionState.set(Phase.JOINING_WIFI, "450NK") // exactly what joinWifi does before handing over
+        BikeConnectionHolder.set(conn)
+        conn.connect()
+
+        awaitPhase(Phase.ERROR)
+        assertEquals(RESCAN, ConnectionState.detail)
+        assertEquals("the auto-connect latch must be released", false, ConnectionState.phase.busy)
     }
 
     @Test fun `a superseded connection's terminal state cannot land on the new one's phase`() {

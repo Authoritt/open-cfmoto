@@ -748,6 +748,10 @@
     <string name="ovk_conn_help_tether_desc">Turn on your phone\'s hotspot and the dash joins it.</string>
     <string name="ovk_conn_help_tether_tested">Tested on: Zontes</string>
     <string name="ovk_conn_help_footer">If it won\'t connect, try a different connector from the Garage.</string>
+    <!-- terminal connect failure: the connector saved in the Garage never established -->
+    <string name="ovk_conn_failed_rescan">Couldn\'t connect with %1$s. Scan the bike\'s QR again to update the garage.</string>
+    <!-- bounded, rider-visible reconnect on the SAME connector (a network drop, not a wrong connector) -->
+    <string name="ovk_conn_reconnecting_n">Reconnecting %1$d/%2$d</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Camera permission required</string>
     <string name="ovk_scan_perm_body">to scan the dash QR</string>

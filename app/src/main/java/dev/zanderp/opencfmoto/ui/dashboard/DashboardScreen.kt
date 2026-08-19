@@ -106,20 +106,33 @@ fun DashboardScreen(nav: NavController) {
     // the factory's pre-projection ConnState wins (Idle/none falls through to the phase label).
     val projecting = snap.phase == Phase.STREAMING || snap.phase == Phase.MIRRORING ||
         snap.phase == Phase.ERROR || snap.phase == Phase.STOPPED
-    val fs = factoryState?.takeIf { !projecting && it != ConnState.Idle }
+    // …with ONE exception: a factory Error/Retrying always wins, because the legacy phase cannot express
+    // either of them. Without this, the terminal Error is mirrored into Phase.ERROR (so auto-connect
+    // re-arms), `projecting` flips true, and the actionable reason ("…escanea el QR otra vez") collapses to
+    // a bare "Error — see logs"; and a mid-ride drop would keep showing STREAMING instead of "Reconectando
+    // 1/3" while the driver retries the SAME connector.
+    val factoryOverrides = factoryState is ConnState.Error || factoryState is ConnState.Retrying
+    val fs = factoryState?.takeIf { (factoryOverrides || !projecting) && it != ConnState.Idle }
     val kind = when (fs) {
         is ConnState.Error -> StatusKind.FAULT
         is ConnState.Connected -> StatusKind.LIVE
         is ConnState.Connecting, is ConnState.Retrying -> StatusKind.BUSY
         else -> snap.phase.kind()
     }
+    // The generic "Error — see logs" label is only a fallback: whenever we have a real reason (the factory's
+    // ConnState.Error, or ConnectionState.detail — which the classic path fills too, e.g. the prober's
+    // "lost bike link", and which the factory mirror fills with the very same reason) THAT is what the rider
+    // needs to read, in full, unabbreviated: it is the actionable part ("…escanea el QR otra vez para
+    // actualizar el garaje"). The gauge colour already says "fault", so the label does not repeat it.
+    val errorLabel = stringResource(R.string.conn_error)
+    fun errorText(reason: String): String = reason.ifBlank { errorLabel }
     val statusText = when (fs) {
         is ConnState.Connecting -> stringResource(R.string.conn_joining_wifi)
         is ConnState.Connected -> stringResource(R.string.conn_pxc_connecting)
-        is ConnState.Retrying -> stringResource(R.string.conn_reconnecting)
-        is ConnState.Error -> stringResource(R.string.conn_error) +
-            if (fs.reason.isNotBlank()) " — ${fs.reason}" else ""
-        else -> stringResource(snap.phase.labelRes)
+        // Bounded, rider-visible reconnect on the SAME connector: "Reconectando 1/3".
+        is ConnState.Retrying -> stringResource(R.string.ovk_conn_reconnecting_n, fs.attempt, fs.maxAttempts)
+        is ConnState.Error -> errorText(fs.reason)
+        else -> if (snap.phase == Phase.ERROR) errorText(snap.detail) else stringResource(snap.phase.labelRes)
     }
     val bikeName = remember { BikeMemory.lastBikeName(ctx) ?: ctx.getString(R.string.ovk_no_bike_paired) }
     val hasBike = remember { BikeMemory.lastQr(ctx) != null }

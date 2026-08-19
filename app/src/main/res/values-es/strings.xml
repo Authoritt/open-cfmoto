@@ -730,6 +730,10 @@
     <string name="ovk_conn_help_tether_desc">Enciendes el hotspot del teléfono y el tablero se une.</string>
     <string name="ovk_conn_help_tether_tested">Probado en: Zontes</string>
     <string name="ovk_conn_help_footer">Si no conecta, prueba con otro conector desde el Garaje.</string>
+    <!-- fallo terminal de conexión: el conector guardado en el Garaje no logró establecerse -->
+    <string name="ovk_conn_failed_rescan">No se pudo conectar con %1$s. Escanea el QR de la moto otra vez para actualizar el garaje.</string>
+    <!-- reintento acotado y visible sobre el MISMO conector (caída de red, no conector equivocado) -->
+    <string name="ovk_conn_reconnecting_n">Reconectando %1$d/%2$d</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Permiso de cámara necesario</string>
     <string name="ovk_scan_perm_body">para escanear el QR del tablero</string>

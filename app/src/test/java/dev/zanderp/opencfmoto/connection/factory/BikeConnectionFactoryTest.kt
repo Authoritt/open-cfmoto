@@ -57,29 +57,36 @@ class BikeConnectionFactoryTest {
         )
     }
 
-    // Retry caps: FINITE for EVERY kind. The old `Int.MAX_VALUE` for SoftAP/P2P claimed parity with classic's
-    // "unbounded retry", but classic's unbounded retry is unbounded *SoftAP* retry AFTER a ~6 s P2P bail-out —
-    // never unbounded retry on a transport that cannot work. With no cascade, an infinite cap on the wrong
-    // connector is a bike that retries forever in silence and latches auto-connect OFF.
+    // Retry caps: FINITE for EVERY kind, and they bound the RECONNECT class only (a link that was alive and
+    // got lost, retried on the SAME connector, shown as "Reconectando 1/3"). The old `Int.MAX_VALUE` for
+    // SoftAP/P2P claimed parity with classic's "unbounded retry", but classic's unbounded retry is unbounded
+    // *SoftAP* retry AFTER a ~6 s P2P bail-out — never unbounded retry on a transport that cannot work.
     @Test fun `retryCapsFor is FINITE for every transport kind (no infinite retry anywhere)`() {
         for (kind in TransportKind.entries) {
-            val (maxAttempts, flapMax) = BikeConnectionFactory.retryCapsFor(kind)
-            assertTrue("maxAttempts for " + kind + " must be finite but was " + maxAttempts, maxAttempts < Int.MAX_VALUE)
+            val (maxReconnects, flapMax) = BikeConnectionFactory.retryCapsFor(kind)
+            assertTrue("reconnect cap for " + kind + " must be finite but was " + maxReconnects, maxReconnects < Int.MAX_VALUE)
             assertTrue("flapMaxFailures for " + kind + " must be finite but was " + flapMax, flapMax < Int.MAX_VALUE)
         }
     }
 
+    @Test fun `retryCapsFor gives every kind the owner's 3-attempt reconnect cap`() {
+        // "por seguridad deja máximo 3 reintentos de conexión, visible en la interfaz: intentando reconectar 1/3"
+        for (kind in TransportKind.entries) {
+            assertEquals("reconnect cap for " + kind, 3, BikeConnectionFactory.retryCapsFor(kind).first)
+        }
+    }
+
     @Test fun `retryCapsFor gives SoftAP the default finite caps`() =
-        assertEquals(MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.SOFT_AP))
+        assertEquals(RECONNECT_MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.SOFT_AP))
 
     @Test fun `retryCapsFor gives P2P the default finite caps`() =
-        assertEquals(MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.P2P))
+        assertEquals(RECONNECT_MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.P2P))
 
     @Test fun `retryCapsFor keeps the default caps for PHONE_HOTSPOT`() =
-        assertEquals(MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.PHONE_HOTSPOT))
+        assertEquals(RECONNECT_MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.PHONE_HOTSPOT))
 
     @Test fun `retryCapsFor keeps the default caps for TETHER`() =
-        assertEquals(MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.TETHER))
+        assertEquals(RECONNECT_MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.TETHER))
 
     // --- reconcileStoredMode: specs persisted BEFORE TransportKind.TETHER existed ---
 

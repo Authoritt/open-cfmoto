@@ -54,8 +54,12 @@ object BikeConnectionHolder {
         // so any Idle we later see is a TERMINAL one. Without this, a driver that reached its terminal Idle
         // before the collector was scheduled would look like a fresh, never-started connection.
         val alreadyStarted = c.state.value !is ConnState.Idle
-        _connection.value = c
+        // Pointer AND collector swap atomically: if they could interleave (a manual cockpit Connect racing
+        // the CDM background auto-connect — the manual path does not go through claimAutoConnect), the
+        // holder could end up pointing at B while only A's collector is live, and A's `!== c` guard makes it
+        // inert ⇒ B's terminal Error never reaches ConnectionState and the busy phase latches again.
         synchronized(mirrorLock) {
+            _connection.value = c
             mirrorJob?.cancel() // the outgoing connection's terminal Idle must not land on the new one's phase
             mirrorJob = scope.launch { mirrorTerminalStates(c, alreadyStarted) }
         }
@@ -116,21 +120,31 @@ object BikeConnectionHolder {
      * when null ⇒ the OFF/classic path is unaffected (byte-for-byte).
      */
     fun disconnectAndClear() {
-        val c = _connection.value
-        _connection.value = null
-        // Stop mirroring BEFORE the teardown: `stop()` sets its own STOPPED right after this call, and the
-        // driver's terminal Idle must not race it (the `_connection.value !== c` guard already covers it;
-        // cancelling is the cheap belt-and-suspenders that also ends the collector).
-        synchronized(mirrorLock) {
+        // Same atomic swap as [set] (pointer + collector under one lock). Stopping the mirror here is what
+        // keeps `stop()`'s own STOPPED from racing the driver's terminal Idle.
+        val c = synchronized(mirrorLock) {
+            val prev = _connection.value
+            _connection.value = null
             mirrorJob?.cancel()
             mirrorJob = null
+            prev
         }
         c?.disconnectAndAwaitTeardown()
     }
 
-    /** SoftAP re-acquire hinge (design §2): drive the live factory connection's own re-establish. No-op when
-     *  null. This is the single path `BikeLink.onWifiReacquired`'s fork calls (review M4). */
-    fun onWifiReacquired(network: Network?) {
-        _connection.value?.onWifiReacquired(network)
+    /**
+     * SoftAP re-acquire hinge (design §2): drive the live factory connection's own re-establish.
+     *
+     * @return true only when a LIVE factory connection took it — the single signal `BikeLink.onWifiReacquired`
+     *   forks on (review M4). False when there is no factory connection **or when its driver already ended in
+     *   a terminal [ConnState.Error]**: that driver has no receiver left for the event, so forwarding would
+     *   silently swallow the re-acquire; the classic prober must handle it instead. This case is reachable
+     *   now that an initial-connect failure is terminal immediately.
+     */
+    fun onWifiReacquired(network: Network?): Boolean {
+        val c = _connection.value ?: return false
+        if (c.state.value is ConnState.Error) return false // dead driver — let the classic path run
+        c.onWifiReacquired(network)
+        return true
     }
 }

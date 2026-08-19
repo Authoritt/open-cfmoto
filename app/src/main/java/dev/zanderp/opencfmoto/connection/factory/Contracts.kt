@@ -57,20 +57,29 @@ sealed interface ConnState {
     data object Idle : ConnState
     data class Connecting(val phase: Phase, val detail: String? = null) : ConnState
     data class Connected(val endpoint: BikeEndpoint) : ConnState
-    data class Retrying(val reason: String, val nextInMs: Long) : ConnState
+    /**
+     * Reconnecting after a link that WAS alive got lost — a NETWORK problem (bike off at the fuel stop, out
+     * of range), retried on the SAME connector. Never entered for a connector that failed to establish in
+     * the first place: that is a wrong-connector signal and goes straight to [Error] (see
+     * `reduce`/`DefaultBikeConnection`).
+     *
+     * [attempt] of [maxAttempts] is what the gauge shows as "Reconectando 1/3", so the rider can see the app
+     * is trying and how much patience is left. [attempt] restarts at 1 after any successful re-establish.
+     */
+    data class Retrying(
+        val reason: String,
+        val nextInMs: Long,
+        val attempt: Int = 1,
+        val maxAttempts: Int = RECONNECT_MAX_ATTEMPTS,
+    ) : ConnState
 
     /**
-     * Terminal failure. [alternative] is the OTHER connector worth recommending to the rider for this bike
-     * ([suggestAlternativeConnector]), or null when there is none — advice only: nothing in this package
-     * ever switches to it. The connector is decided once at pairing and used verbatim; a failure is bounded
-     * and visible rather than a silent cascade (which is what makes connecting slow). Defaults to null so
-     * every existing construction site and test is unaffected.
+     * Terminal failure. [reason] is shown to the rider (the cockpit gauge renders it), so on the
+     * initial-connect-failure path it carries the rider-facing "scan the QR again to update the garage"
+     * text `BikeConnectionFactory` injects — the connector is a Garage setting, and a wrong one is fixed by
+     * re-scanning, never by the app substituting another one.
      */
-    data class Error(
-        val reason: String,
-        val recoverable: Boolean,
-        val alternative: ConnectorChoice? = null,
-    ) : ConnState
+    data class Error(val reason: String, val recoverable: Boolean) : ConnState
 }
 
 /** App-facing handle to a bike connection: observe [state], drive it with [connect]/[disconnect]. */

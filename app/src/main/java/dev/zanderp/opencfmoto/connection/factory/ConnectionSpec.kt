@@ -178,9 +178,11 @@ fun resolveWifiTransport(qr: QrData, pref: WifiTransport, remembered: String?): 
 
 /**
  * **The connector a bike is PAIRED with**: decided ONCE (at scan/seed time), persisted per bike, and used
- * verbatim at ride time — no cascade, no fallback, because fallbacks are what make connecting slow (classic
- * burns ~25 s on P2P before dropping to SoftAP). A failed connect fails bounded and visibly, and the app
- * recommends the alternative ([suggestAlternativeConnector]) instead of silently trying it.
+ * verbatim at ride time. The app NEVER switches connectors by itself — that is the rider's call in the
+ * Garage/Scan picker — because automatic fallbacks are what make connecting slow (classic burns ~25 s on
+ * P2P before dropping to SoftAP). A connector that never establishes therefore fails on the FIRST attempt,
+ * with a rider-facing "scan the QR again to update the garage"; only a link that was alive and got lost is
+ * retried, on the SAME connector, up to `RECONNECT_MAX_ATTEMPTS` ("Reconectando 1/3").
  *
  * Composition: [fromQr] picks the FAMILY (phone-hosts-the-network vs Wi-Fi), then — for the two Wi-Fi kinds
  * only — [resolveWifiTransport] applies the rider's Setup preference and the learned winner, exactly as

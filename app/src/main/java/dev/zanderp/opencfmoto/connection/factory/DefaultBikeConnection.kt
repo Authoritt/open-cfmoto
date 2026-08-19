@@ -47,8 +47,15 @@ internal const val RETRY_BASE_MS = 1_000L
 /** Upper bound on the backoff so a long outage still retries about twice a minute. */
 internal const val RETRY_CAP_MS = 30_000L
 
-/** Consecutive failures (no clean Connected in between) before a retry is declared fatal ([ConnState.Error]). */
-internal const val MAX_ATTEMPTS = 6
+/**
+ * How many times a link that WAS alive is retried on the SAME connector before the driver gives up
+ * ([ConnState.Error]). Three, by the owner's rule: a mid-ride drop is a NETWORK problem worth a bounded,
+ * rider-visible retry ("Reconectando 1/3"), not an excuse to keep the phone busy indefinitely.
+ *
+ * It bounds ONLY that class. A connector that never established is not retried at all (see [reduce]).
+ * And no retry ever changes the connector — that is the rider's decision in the Garage/Scan picker.
+ */
+internal const val RECONNECT_MAX_ATTEMPTS = 3
 
 /** Flap window: total drops within this span (even with brief successes between) escalate to fatal (F6). */
 internal const val FLAP_WINDOW_NS = 60_000_000_000L // 60 s
@@ -69,26 +76,40 @@ internal fun backoffMs(attempt: Int): Long =
  * [ConnState] and an incoming [ConnEvent], compute the next state — no I/O, no time, no mutation — so the
  * whole reconnect policy is unit-testable without Android or a bike.
  *
- * Both drop kinds go to [ConnState.Retrying] so the UI shows a uniform "reconnecting in N ms" during
- * backoff (F5). They differ only in what the *driver* re-runs afterward: a [ConnEvent.LinkDropped]
- * re-`establish()`s the LINK on the still-live transport, whereas a [ConnEvent.TransportLost] re-`open()`s
- * the transport first (the driver re-enters [Phase.JoinTransport] via `ensureConnected`, since the reducer
- * cannot store the endpoint it would need to rebuild that phase).
+ * **The two failure classes (owner's design).** The connector is picked by the rider at scan and saved in
+ * the Garage; at ride time it is used verbatim. So a failure means one of two very different things, and
+ * [everConnected] is what tells them apart:
+ *  - **it never established** ([everConnected] false) ⇒ the Garage entry is WRONG for this bike. Retrying
+ *    or substituting another connector would only make connecting slow and hide the real problem, so this
+ *    goes STRAIGHT to a terminal [ConnState.Error] whose reason tells the rider to scan the QR again.
+ *  - **it was alive and got LOST** ([everConnected] true) ⇒ a transient fault (bike off at the fuel stop,
+ *    out of range, Wi-Fi re-acquire). THIS is what reconnection is for: [ConnState.Retrying] + backoff,
+ *    bounded by the finite caps in `BikeConnectionFactory.retryCapsFor`.
+ *
+ * Both drop kinds share that shape so the UI shows a uniform "reconnecting in N ms" during backoff (F5).
+ * They differ only in what the *driver* re-runs afterward: a [ConnEvent.LinkDropped] re-`establish()`s the
+ * LINK on the still-live transport, whereas a [ConnEvent.TransportLost] re-`open()`s the transport first
+ * (the driver re-enters [Phase.JoinTransport] via `ensureConnected`, since the reducer cannot store the
+ * endpoint it would need to rebuild that phase).
  *
  * `cur` is deliberately not consulted: the driver only emits events valid for the current state, so each
- * event fully determines the next state. Keeping it event-dominant is what makes the table trivial to test.
+ * event (plus [everConnected]) fully determines the next state. Keeping it event-dominant is what makes the
+ * table trivial to test. [everConnected] defaults to false — the conservative class — and only the three
+ * failure events consult it; progress and [ConnEvent.Disconnected] ignore it entirely.
  */
-internal fun reduce(cur: ConnState, ev: ConnEvent): ConnState = when (ev) {
+internal fun reduce(cur: ConnState, ev: ConnEvent, everConnected: Boolean = false): ConnState = when (ev) {
     ConnEvent.StartRequested -> ConnState.Connecting(Phase.Discovering)
     is ConnEvent.TransportOpened -> ConnState.Connecting(Phase.Handshake)
     is ConnEvent.LinkEstablished -> ConnState.Connected(ev.endpoint)
-    is ConnEvent.LinkDropped -> ConnState.Retrying(ev.reason, RETRY_BASE_MS)
-    is ConnEvent.TransportLost -> ConnState.Retrying(ev.reason, RETRY_BASE_MS)
-    is ConnEvent.Failed ->
-        if (ev.recoverable) ConnState.Retrying(ev.reason, RETRY_BASE_MS)
-        else ConnState.Error(ev.reason, recoverable = false)
+    is ConnEvent.LinkDropped -> retryOrFail(ev.reason, everConnected)
+    is ConnEvent.TransportLost -> retryOrFail(ev.reason, everConnected)
+    is ConnEvent.Failed -> retryOrFail(ev.reason, everConnected && ev.recoverable)
     ConnEvent.Disconnected -> ConnState.Idle
 }
+
+/** Reconnect only what was once connected; anything else is terminal (see [reduce]'s two failure classes). */
+private fun retryOrFail(reason: String, recover: Boolean): ConnState =
+    if (recover) ConnState.Retrying(reason, RETRY_BASE_MS) else ConnState.Error(reason, recoverable = false)
 
 /**
  * Owns one bike connection's lifecycle (design doc section 6): a coroutine walks Layer 1 (`transport.open`)
@@ -109,7 +130,8 @@ internal fun reduce(cur: ConnState, ev: ConnEvent): ConnState = when (ev) {
  * (SoftAP/P2P over `BikeWifi`/`BikeWifiP2p`, EasyConn/Yunmo over `EasyConnProber`/`YunmoLink`), so the
  * happy path is device-runnable; the state machine and the reducer it drives are complete and tested here.
  *
- * @param maxAttempts consecutive-failure cap before fatal (injected so tests can force a fast fatal).
+ * @param maxReconnectAttempts how many RECONNECT attempts a once-Connected link gets before fatal
+ *   (injected so tests can force a fast fatal). The initial connect never retries, whatever this says.
  * @param flapWindowNs / [flapMaxFailures] the F6 flap cap (injected for tests).
  * @param onConnected Garage persistence hook (design doc §5, Task 8): invoked with the live [spec] —
  *   carrying a refreshed [ConnectionSpec.lastEndpointHint] — every time the driver (re)reaches
@@ -118,9 +140,9 @@ internal fun reduce(cur: ConnState, ev: ConnEvent): ConnState = when (ev) {
  *   free of the outer app's persistence singleton and this behavior stays unit-testable without Android
  *   (default no-op keeps every existing test call site compiling unchanged).
  *   [BikeConnectionFactory.create] wires the real `memory.saveSpec(ctx, _)`.
- * @param alternative the connector worth RECOMMENDING if this one fails ([suggestAlternativeConnector],
- *   computed once by [BikeConnectionFactory.create] from the QR). Rides on every terminal
- *   [ConnState.Error]; this class never acts on it — there is no cascade, by design.
+ * @param initialFailureReason rider-facing text for the INITIAL-connect-failure class ("…scan the QR again
+ *   to update the garage") — localized by [BikeConnectionFactory.create], which is the only place with a
+ *   Context, so this class stays free of Android resources. Null keeps the technical reason (tests).
  */
 class DefaultBikeConnection(
     private val transport: BikeTransport,
@@ -128,11 +150,11 @@ class DefaultBikeConnection(
     private val spec: ConnectionSpec,
     private val io: PlatformIO,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-    private val maxAttempts: Int = MAX_ATTEMPTS,
+    private val maxReconnectAttempts: Int = RECONNECT_MAX_ATTEMPTS,
     private val flapWindowNs: Long = FLAP_WINDOW_NS,
     private val flapMaxFailures: Int = FLAP_MAX_FAILURES,
     private val onConnected: (ConnectionSpec) -> Unit = {},
-    private val alternative: ConnectorChoice? = null,
+    private val initialFailureReason: String? = null,
 ) : BikeConnection {
 
     private val _state = MutableStateFlow<ConnState>(ConnState.Idle)
@@ -182,7 +204,7 @@ class DefaultBikeConnection(
             if ((spec.mode == TransportKind.PHONE_HOTSPOT || spec.mode == TransportKind.TETHER) &&
                 io.activityOrNull() == null
             ) {
-                _state.value = ConnState.Error("needs foreground", recoverable = false, alternative = alternative)
+                _state.value = ConnState.Error("needs foreground", recoverable = false)
                 return
             }
 
@@ -240,18 +262,39 @@ class DefaultBikeConnection(
         var attempt = 0 // consecutive failures -> backoff size; reset on a clean Connected
         var windowStartNs = System.nanoTime()
         var windowFailures = 0 // failures within the current flap window (NOT reset by a brief success)
+        var everConnected = false // has this connect() call ever reached Connected? -> which failure class
         var fatal: ConnState? = null
         try {
             dispatch(ConnEvent.StartRequested) // Idle -> Connecting(Discovering)
             while (true) {
                 val problem: ConnEvent = try {
                     ensureConnected() // opens transport if needed, then establishes a link -> Connected
+                    everConnected = true
                     attempt = 0
                     events.receive() // suspends until a watchdog reports trouble
                 } catch (c: CancellationException) {
                     throw c // disconnect() cancelled us — unwind into the finally
                 } catch (t: Throwable) {
                     ConnEvent.LinkDropped(t.message ?: "connect failed") // open/establish threw -> treat as drop
+                }
+
+                // Failure class split (see `reduce`): a connector that NEVER established is a wrong-Garage-
+                // entry signal — ONE attempt, no backoff, terminal Error with the "scan again" text. Only a
+                // link that was alive and got lost falls through to the reconnect machinery below.
+                val decided = reduce(_state.value, problem, everConnected)
+                if (decided is ConnState.Error) {
+                    fatal = if (!everConnected && initialFailureReason != null) {
+                        io.log(
+                            "BikeConnection",
+                            "connect failed before ever connecting (${decided.reason}) — NOT retrying: " +
+                                "the connector is a Garage setting, the rider re-scans to fix it",
+                        )
+                        decided.copy(reason = initialFailureReason)
+                    } else {
+                        io.log("BikeConnection", "unrecoverable: ${decided.reason}")
+                        decided
+                    }
+                    return // -> finally: teardown + publish Error
                 }
 
                 when (problem) {
@@ -271,6 +314,10 @@ class DefaultBikeConnection(
                     else -> continue // progress events are driven inline, not fed through the channel
                 }
 
+                // `attempt` is the number of the RECONNECT we are about to make (1-based), which is exactly
+                // what the gauge shows as "Reconectando 1/3" — so the counter the rider reads is the attempt
+                // actually in flight. Reset to 0 on every clean Connected above, so an unrelated later drop
+                // starts again at 1.
                 attempt++
                 val now = System.nanoTime()
                 if (now - windowStartNs > flapWindowNs) {
@@ -279,17 +326,17 @@ class DefaultBikeConnection(
                 }
                 windowFailures++
 
-                val exhausted = attempt >= maxAttempts // cannot connect at all
+                val exhausted = attempt > maxReconnectAttempts // the SAME connector, tried its allowance
                 val unstable = windowFailures >= flapMaxFailures // connects but flaps (F6)
                 if (exhausted || unstable) {
                     val why =
                         if (unstable) "connection unstable ($windowFailures drops within ${flapWindowNs / 1_000_000_000}s)"
-                        else "connection failed after $attempt attempts"
-                    fatal = ConnState.Error(why, recoverable = false, alternative = alternative)
+                        else "lost the bike link — $maxReconnectAttempts reconnect attempts failed"
+                    fatal = ConnState.Error(why, recoverable = false)
                     return // -> finally: teardown + publish Error
                 }
 
-                retryThen(problem, attempt) // -> Retrying(reason, backoff); wait
+                retryThen(problem, attempt) // -> Retrying(reason, backoff, attempt/max); wait
             }
         } finally {
             teardownInternal()
@@ -333,11 +380,19 @@ class DefaultBikeConnection(
         throw last ?: IllegalStateException("no link could be established")
     }
 
-    /** Canonical transition via [reduce], overlaid with the real capped-exponential backoff, then wait. */
+    /**
+     * Canonical transition via [reduce], overlaid with the real capped-exponential backoff, then wait.
+     * Only ever reached for the RECONNECT class (a link that was alive and got lost) — the caller already
+     * returned for the initial-connect-failure class — hence the explicit `everConnected = true`.
+     */
     private suspend fun retryThen(ev: ConnEvent, attempt: Int) {
         val wait = backoffMs(attempt)
-        val next = reduce(_state.value, ev)
-        _state.value = if (next is ConnState.Retrying) next.copy(nextInMs = wait) else next
+        val next = reduce(_state.value, ev, everConnected = true)
+        _state.value = if (next is ConnState.Retrying) {
+            next.copy(nextInMs = wait, attempt = attempt, maxAttempts = maxReconnectAttempts)
+        } else {
+            next
+        }
         delay(wait)
     }
 
