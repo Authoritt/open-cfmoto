@@ -195,7 +195,7 @@ fun ConnectorHelpDialog(onDismiss: () -> Unit) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.ovk_conn_help_title), color = c.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Column(
-                    Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                    Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     ConnectorHelpRow(
@@ -213,6 +213,7 @@ fun ConnectorHelpDialog(onDismiss: () -> Unit) {
                         stringResource(R.string.ovk_conn_help_ble_desc),
                         stringResource(R.string.ovk_conn_help_ble_tested),
                         warnTested = true,
+                        note = stringResource(R.string.ovk_conn_help_ble_try),
                     )
                     ConnectorHelpRow(
                         stringResource(R.string.ovk_conn_hotspot),
@@ -227,16 +228,33 @@ fun ConnectorHelpDialog(onDismiss: () -> Unit) {
 }
 
 /**
- * One connector's plain-language row in [ConnectorHelpDialog]: what it does + which bikes confirmed it.
+ * One connector's plain-language row in [ConnectorHelpDialog]: what it does + WHICH BRANDS AND MODELS it is
+ * confirmed on. The brands live here and nowhere else — the picker names the mechanism, this sheet carries
+ * the evidence — so a rider can answer "will this one work on MY bike?" without the mechanism itself
+ * pretending to belong to a marque.
+ *
  * [warnTested] renders the "tested on" line in the theme's warning accent (never a raw red/[c.fault]) — used
- * for BLE's honest "not yet tested on a bike" line, which is deliberate, not an error state.
+ * for BLE's honest "not yet tested on a bike" line, which is deliberate, not an error state. [note] is an
+ * optional extra line: today it invites the rider to TRY BLE on a non-Rieju Carbit dash, because the
+ * credential push it uses belongs to the dash software, not to the badge on the tank — the app can't test
+ * that from here, but a rider with the bike in front of them can.
  */
 @Composable
-private fun ConnectorHelpRow(title: String, desc: String, tested: String, warnTested: Boolean = false) {
+private fun ConnectorHelpRow(
+    title: String,
+    desc: String,
+    tested: String,
+    warnTested: Boolean = false,
+    note: String? = null,
+) {
     val c = LocalCockpitColors.current
     Column {
         Text(title, color = c.ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         Text(desc, color = c.inkDim, fontSize = 11.5.sp)
         Text(tested, color = if (warnTested) c.warn else c.inkFaint, fontSize = 11.sp)
+        if (note != null) {
+            Spacer(Modifier.size(3.dp))
+            Text(note, color = c.inkDim, fontSize = 11.sp)
+        }
     }
 }

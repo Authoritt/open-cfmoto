@@ -742,13 +742,16 @@
     <!-- connector help sheet ("?" affordance next to the connector row / in the picker header) -->
     <string name="ovk_conn_help_title">How does your bike connect?</string>
     <string name="ovk_conn_help_softap_desc">The dash creates its own Wi-Fi network and your phone joins it.</string>
-    <string name="ovk_conn_help_softap_tested">Tested on: CFMoto, Voge, Benelli, QJ, Morini and more</string>
+    <string name="ovk_conn_help_softap_tested">Tested on: CFMoto (450NK), Voge, Benelli, QJ, Morini, Morbidelli and more</string>
     <string name="ovk_conn_help_p2p_desc">Wi-Fi Direct with the dash. Usually connects faster.</string>
     <string name="ovk_conn_help_p2p_tested">Tested on: CFMoto (DIRECT-… networks)</string>
     <string name="ovk_conn_help_ble_desc">Your phone creates the network and hands the dash the password over Bluetooth.</string>
-    <string name="ovk_conn_help_ble_tested">⚠ New — not yet tested on a bike</string>
+    <string name="ovk_conn_help_ble_tested">⚠ New — not yet tested on a bike. Built for the Rieju Aventura 500, from reverse-engineering the Carbit dash software (action=128).</string>
+    <!-- Invitation to experiment: the BLE credential push belongs to the Carbit software many dashes run,
+         not to Rieju. We cannot test that from here; a rider with the bike in front of them can. -->
+    <string name="ovk_conn_help_ble_try">The trick isn\'t Rieju-only: it comes from the Carbit software many dashes run. If your bike works with Hotspot, give BLE a try — if the dash takes it, it will connect on its own, with nothing for you to switch on.</string>
     <string name="ovk_conn_help_hotspot_desc">Turn your phone hotspot on and the dash joins it.</string>
-    <string name="ovk_conn_help_hotspot_tested">Tested on: Zontes</string>
+    <string name="ovk_conn_help_hotspot_tested">Tested on: Zontes 125X and other Carbit dashes</string>
     <string name="ovk_conn_help_footer">If it won\'t connect, try a different connector from the Garage.</string>
     <!-- terminal connect failure: the connector saved in the Garage never established -->
     <string name="ovk_conn_failed_rescan">Couldn\'t connect with %1$s. Scan the bike\'s QR again to update the garage.</string>

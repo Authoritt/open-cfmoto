@@ -722,13 +722,16 @@
     <!-- hoja de ayuda de conectores ("?" junto a la fila / en la cabecera del selector) -->
     <string name="ovk_conn_help_title">¿Cómo se conecta tu moto?</string>
     <string name="ovk_conn_help_softap_desc">El tablero crea su propia red Wi-Fi y el teléfono se une.</string>
-    <string name="ovk_conn_help_softap_tested">Probado en: CFMoto, Voge, Benelli, QJ, Morini y más</string>
+    <string name="ovk_conn_help_softap_tested">Probado en: CFMoto (450NK), Voge, Benelli, QJ, Morini, Morbidelli y más</string>
     <string name="ovk_conn_help_p2p_desc">Wi-Fi Directo con el tablero. Suele conectar más rápido.</string>
     <string name="ovk_conn_help_p2p_tested">Probado en: CFMoto (redes DIRECT-…)</string>
     <string name="ovk_conn_help_ble_desc">El teléfono crea la red y le pasa la clave al tablero por Bluetooth.</string>
-    <string name="ovk_conn_help_ble_tested">⚠ Nuevo — aún sin probar en una moto</string>
+    <string name="ovk_conn_help_ble_tested">⚠ Nuevo — aún sin probar en una moto. Hecho para la Rieju Aventura 500, a partir de ingeniería inversa del software Carbit del tablero (action=128).</string>
+    <!-- Invitación a experimentar: el envío de la clave por Bluetooth es del software Carbit que llevan
+         muchos tableros, no de Rieju. Aquí no podemos probarlo; un piloto con la moto delante, sí. -->
+    <string name="ovk_conn_help_ble_try">El truco no es solo de Rieju: viene del software Carbit que llevan muchos tableros. Si tu moto funciona con Hotspot, prueba BLE — si el tablero lo acepta, se conectará sola y no tendrás que encender nada.</string>
     <string name="ovk_conn_help_hotspot_desc">Enciendes el hotspot del teléfono y el tablero se une.</string>
-    <string name="ovk_conn_help_hotspot_tested">Probado en: Zontes</string>
+    <string name="ovk_conn_help_hotspot_tested">Probado en: Zontes 125X y otros tableros Carbit</string>
     <string name="ovk_conn_help_footer">Si no conecta, prueba con otro conector desde el Garaje.</string>
     <!-- fallo terminal de conexión: el conector guardado en el Garaje no logró establecerse -->
     <string name="ovk_conn_failed_rescan">No se pudo conectar con %1$s. Escanea el QR de la moto otra vez para actualizar el garaje.</string>
