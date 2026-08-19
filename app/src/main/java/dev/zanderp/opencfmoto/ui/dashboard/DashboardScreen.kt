@@ -153,7 +153,8 @@ fun DashboardScreen(nav: NavController) {
         // shows. prepareFreeRide arms the session; CfmotoConnect.startCfmotoMap runs the proven connect
         // path (join bike Wi-Fi + project own content, no Android Auto). Fixes "Conectar opens the map menu".
         // preferFactory = true: the cockpit owns its SoftAP/P2P connection via the connection factory
-        // (reconnect + teardown parity), never the global dev toggle (removed). AA / auto-connect stay classic.
+        // (reconnect + teardown parity), never the global dev toggle (removed). Own-map auto-connect uses the
+        // factory too; only mirror/espejo and the Android-Auto path stay classic.
         GpxSession.prepareFreeRide()
         val activity = ctx.findActivity() ?: return
         CfmotoConnect.startCfmotoMap(activity, preferFactory = true)

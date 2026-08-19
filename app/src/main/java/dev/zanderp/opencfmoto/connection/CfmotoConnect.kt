@@ -70,8 +70,9 @@ object CfmotoConnect {
 
     // The 450NK SoftAP/P2P factory route is now a PER-CALLER choice: [joinWifi]'s `preferFactory` flag
     // (replaces the old runtime dev toggle / compile-time const). Default false = classic path byte-for-byte
-    // (every legacy/auto/mirror/AA call site); the new Compose cockpit passes `preferFactory = true` so its
-    // OWN connection routes SoftAP/P2P through [BikeConnectionFactory] WITH reconnect + teardown parity
+    // (the legacy MainActivity, mirror/espejo and Android-Auto call sites); every OWN-MAP connect — the
+    // cockpit Conectar AND foreground/background auto-connect — passes `preferFactory = true` so it
+    // routes SoftAP/P2P through [BikeConnectionFactory] WITH reconnect + teardown parity
     // (handle retained in [BikeConnectionHolder]; the `BikeLink.onWifiReacquired` fork drives re-establish;
     // raised retry caps), scoped to the non-Android-Auto path. See `flip-work-design.md`. The Rieju
     // phone-hotspot route ([isBleHotspot] below) goes through the factory INDEPENDENT of `preferFactory`.
@@ -556,9 +557,9 @@ object CfmotoConnect {
      * `beginGpxProjection()`, moved verbatim. The cockpit must have armed the session first
      * (`GpxSession.prepareFreeRide()`), so [GpxSession.active] is already set here.
      *
-     * [preferFactory] is forwarded to [joinWifi]: the interactive cockpit connect passes true so its own
-     * SoftAP/P2P connection runs through the connection factory; the background/foreground AUTO-connect
-     * callers keep the default false (classic path, unchanged).
+     * [preferFactory] is forwarded to [joinWifi]: every own-map connect — the interactive cockpit
+     * Conectar AND the foreground/background auto-connect — passes true so its SoftAP/P2P connection runs
+     * through the connection factory. Mirror (espejo) and the Android-Auto path stay classic (default false).
      */
     fun startCfmotoMap(activity: Activity, preferFactory: Boolean = false) {
         if (!GpxSession.active) {
@@ -647,7 +648,7 @@ object CfmotoConnect {
         tearDownForModeSwitch(app, clearMap = false, clearMirror = true)
         applyProfile(app, saved)
         ConnectionState.set(Phase.MIRRORING, BikeMemory.lastBikeName(app) ?: saved.ssid)
-        joinWifi(app, saved, gateOnAaSteady = false, activity = null)
+        joinWifi(app, saved, gateOnAaSteady = false, activity = null, preferFactory = true)
         return true
     }
 
@@ -672,7 +673,7 @@ object CfmotoConnect {
         if (!claimAutoConnect()) { LogBus.log("[auto-fg] another auto-connect just fired — skip"); return false }
         if (!GpxSession.active) GpxSession.prepareFreeRide()
         LogBus.log("→ [auto-fg] auto-connecting '${BikeMemory.lastBikeName(activity)}' (CFMOTO map)")
-        startCfmotoMap(activity)
+        startCfmotoMap(activity, preferFactory = true)
         return true
     }
 
