@@ -131,6 +131,7 @@ class DefaultBikeConnectionTest {
     /** Stand-ins for the localized texts `BikeConnectionFactory` injects (`ovk_conn_*`). */
     private val RESCAN = "Couldn't connect with CFMoto Wi-Fi. Scan the bike's QR again to update the garage."
     private val LOST = "Lost the connection to the bike. Tap Connect to try again."
+    private val NEEDS_APP = "This bike only connects with the app open. Tap Connect."
 
     private fun softApEndpoint() = BikeEndpoint(
         network = null,
@@ -201,6 +202,31 @@ class DefaultBikeConnectionTest {
             assertTrue("must fail fast, with no backoff wait (took ${elapsed}ms)", elapsed < RETRY_BASE_MS)
             assertTrue("teardown still runs on the fast-fail path", transport.closed >= 1)
             assertTrue("link.stop() still runs on the fast-fail path", link.stopped >= 1)
+        }
+    }
+
+    @Test
+    fun `a background connect on an app-only connector is refused with rider-facing text, never opened`() {
+        // Third terminal case: PHONE_HOTSPOT (Rieju BLE handoff) and TETHER (manual hotspot) need the app on
+        // screen. CfmotoConnect refuses this earlier with its own localized message, so this driver gate is a
+        // BACKSTOP — and a backstop that is "never reached" is exactly the one that surfaces on someone
+        // else's phone, on the least-proven connector. It must not leak an internal English string either.
+        for (mode in listOf(TransportKind.PHONE_HOTSPOT, TransportKind.TETHER)) {
+            val transport = RecordingTransport()
+            val conn = DefaultBikeConnection(
+                transport = transport,
+                links = listOf(RecordingLink()),
+                spec = ConnectionSpec(bikeId = "test-bike", mode = mode),
+                io = ContextIo, // activityOrNull() == null -> the app is not on screen
+                needsForegroundReason = NEEDS_APP,
+            )
+
+            conn.connect()
+
+            val s = conn.state.value
+            assertTrue("$mode must be refused, not attempted: $s", s is ConnState.Error)
+            assertEquals(NEEDS_APP, (s as ConnState.Error).reason)
+            assertEquals("the connector must never be opened in the background", 0, transport.opened)
         }
     }
 

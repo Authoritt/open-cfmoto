@@ -145,6 +145,9 @@ object BikeConnectionFactory {
             // rider reads ON THE BIKE. No connector name here on purpose: the connector is not the suspect —
             // the network is — so naming it would only add noise to "tap Connect to try again".
             lostLinkReason = ctx.getString(R.string.ovk_conn_lost_retry),
+            // …and the third terminal case: a connector that only works with the app on screen (Rieju BLE
+            // handoff / manual hotspot) asked to connect from the background auto-connect.
+            needsForegroundReason = ctx.getString(R.string.ovk_conn_needs_app),
             onConnected = { saved ->
                 memory.saveSpec(ctx, saved)
                 // Record the REAL transport outcome (saveSpec no longer mirrors spec.mode — that was a

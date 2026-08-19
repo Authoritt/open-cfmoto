@@ -754,6 +754,8 @@
     <string name="ovk_conn_reconnecting_n">Reconnecting %1$d/%2$d</string>
     <!-- gave up reconnecting a link that WAS alive (network drop): rider-facing, says what to do next -->
     <string name="ovk_conn_lost_retry">Lost the connection to the bike. Tap Connect to try again.</string>
+    <!-- bikes whose connector needs the app on screen (Rieju BLE handoff / manual hotspot): background connect refused -->
+    <string name="ovk_conn_needs_app">This bike only connects with the app open. Tap Connect.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Camera permission required</string>
     <string name="ovk_scan_perm_body">to scan the dash QR</string>

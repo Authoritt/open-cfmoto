@@ -147,6 +147,10 @@ private fun retryOrFail(reason: String, recover: Boolean): ConnState =
  *   recovered ("…toca Conectar para reintentar"). Same injection, same reason — this one is read ON THE BIKE,
  *   mid-ride, so it must never be an internal English string. The technical detail (attempt count / flap
  *   window) still goes to the log. Null keeps the technical reason (tests).
+ * @param needsForegroundReason rider-facing text for the third and last terminal case: a connector that only
+ *   works with the app on screen was asked to connect in the background. Injected like the other two — a
+ *   backstop that is "never reached" is exactly the one that surfaces on someone else's phone, and it would
+ *   land on the Rieju owner (the least-proven connector). Null keeps the technical reason (tests).
  */
 class DefaultBikeConnection(
     private val transport: BikeTransport,
@@ -160,6 +164,7 @@ class DefaultBikeConnection(
     private val onConnected: (ConnectionSpec) -> Unit = {},
     private val initialFailureReason: String? = null,
     private val lostLinkReason: String? = null,
+    private val needsForegroundReason: String? = null,
 ) : BikeConnection {
 
     private val _state = MutableStateFlow<ConnState>(ConnState.Idle)
@@ -209,7 +214,8 @@ class DefaultBikeConnection(
             if ((spec.mode == TransportKind.PHONE_HOTSPOT || spec.mode == TransportKind.TETHER) &&
                 io.activityOrNull() == null
             ) {
-                _state.value = ConnState.Error("needs foreground", recoverable = false)
+                io.log("BikeConnection", "refused: ${spec.mode} needs the app on screen (no Activity)")
+                _state.value = ConnState.Error(needsForegroundReason ?: "needs foreground", recoverable = false)
                 return
             }
 
