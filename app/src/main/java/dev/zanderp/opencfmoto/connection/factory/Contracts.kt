@@ -67,29 +67,18 @@ interface LinkSession {
 /**
  * Layer 1: gets the phone and the bike onto the same network (SoftAP/P2P/PhoneHotspot) and returns
  * the resulting [BikeEndpoint]. Does not speak the bike's app protocol — that is [BikeLink].
- *
- * TODO(next task touching this file): the brief's shape is `open(ctx, spec, io)` — a third
- * `spec: ConnectionSpec` parameter is intentionally deferred. `ConnectionSpec` is owned by a later
- * task's `ConnectionSpec.kt` and does not exist in this task's compile unit yet (this task's global
- * constraint is "only create Contracts.kt", and this task's fields — `profile` in particular — map
- * to the existing `BikeProfile`/`BikeProfileHolder` domain type, not a primitive, so guessing its
- * shape here risked a wrong, colliding declaration). Widen this signature to add `spec` once
- * `ConnectionSpec` exists; see task-2-report.md "Concerns" for the full reasoning.
  */
 interface BikeTransport {
-    suspend fun open(ctx: Context, io: PlatformIO): BikeEndpoint
+    suspend fun open(ctx: Context, spec: ConnectionSpec, io: PlatformIO): BikeEndpoint
     fun close()
 }
 
 /**
  * Layer 2: speaks the bike's app protocol (EasyConn, falling back to Yunmo) over an already-open
  * [BikeEndpoint] and returns the resulting [LinkSession].
- *
- * TODO(next task touching this file): same deferred `spec: ConnectionSpec` parameter as
- * [BikeTransport.open] — brief shape is `establish(ctx, ep, spec, io)`; see task-2-report.md.
  */
 interface BikeLink {
-    suspend fun establish(ctx: Context, endpoint: BikeEndpoint, io: PlatformIO): LinkSession
+    suspend fun establish(ctx: Context, endpoint: BikeEndpoint, spec: ConnectionSpec, io: PlatformIO): LinkSession
     fun stop()
 }
 
