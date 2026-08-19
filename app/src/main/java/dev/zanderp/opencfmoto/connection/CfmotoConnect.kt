@@ -45,6 +45,8 @@ import dev.zanderp.opencfmoto.VideoPrefs
 import dev.zanderp.opencfmoto.WifiGate
 import dev.zanderp.opencfmoto.WifiTransport
 import dev.zanderp.opencfmoto.ConnectionState
+import dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory
+import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
 
 /**
  * App-scoped owner of the CFMOTO connect + project trigger (bike Wi‑Fi join, PXC prober start,
@@ -65,6 +67,16 @@ import dev.zanderp.opencfmoto.ConnectionState
  *    process-global [BikeLink.prober] and creates + assigns it if absent, mirroring MainActivity.onCreate.
  */
 object CfmotoConnect {
+
+    /**
+     * Route SoftAP/P2P connects through [BikeConnectionFactory] (design doc 2026-08-18) instead of the
+     * proven [joinWifiP2p] / [BikeWifi.reuseOrJoin] + [proberFor] path below. KEEP FALSE: the factory has
+     * not been verified against a live bike yet (Task 7 only proves it builds/installs/launches clean),
+     * and even once flipped it does not yet honor [joinWifi]'s `gateOnAaSteady` hand-off (Android-Auto-
+     * gated connects still need the old path) or the phone-hotspot transport (Task 9). Flip only after an
+     * owner-in-the-loop SoftAP + P2P regression pass on the bike; instant rollback is flipping this back.
+     */
+    private const val USE_FACTORY = false
 
     /**
      * The process-global bike PXC client. Reuse [BikeLink.prober] if it already exists (e.g. the AA
@@ -184,6 +196,13 @@ object CfmotoConnect {
         // Phone-hosts-hotspot (Zontes action=128 / no SoftAP pwd): dash joins the phone.
         if (qr.supportsPhoneHotspot && qr.pwd.isEmpty()) {
             joinPhoneHotspot(context, qr, gateOnAaSteady, activity)
+            return
+        }
+        // Everything past this point is a SoftAP- or P2P-capable QR (phone-hotspot already returned
+        // above) — the two transports BikeConnectionFactory.selectTransport currently drives end-to-end.
+        if (USE_FACTORY) {
+            LogBus.log("→ [FACTORY] joinWifi: routing '${qr.ssid}' through BikeConnectionFactory (flagged)")
+            BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO).connect()
             return
         }
         // AUTO: P2P when the QR is P2P-only (incl. non-DIRECT SSIDs — join by MAC), or DIRECT-*.
