@@ -68,12 +68,13 @@ import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
  */
 object CfmotoConnect {
 
-    // The 450NK SoftAP/P2P factory route is now a RUNTIME dev toggle (replaces the old compile-time const
-    // flag): [AppSettings.useConnectionFactory], read in [joinWifi] below. Default OFF = classic path
-    // byte-for-byte; ON routes SoftAP/P2P through [BikeConnectionFactory] WITH reconnect + teardown parity
+    // The 450NK SoftAP/P2P factory route is now a PER-CALLER choice: [joinWifi]'s `preferFactory` flag
+    // (replaces the old runtime dev toggle / compile-time const). Default false = classic path byte-for-byte
+    // (every legacy/auto/mirror/AA call site); the new Compose cockpit passes `preferFactory = true` so its
+    // OWN connection routes SoftAP/P2P through [BikeConnectionFactory] WITH reconnect + teardown parity
     // (handle retained in [BikeConnectionHolder]; the `BikeLink.onWifiReacquired` fork drives re-establish;
     // raised retry caps), scoped to the non-Android-Auto path. See `flip-work-design.md`. The Rieju
-    // phone-hotspot route ([isBleHotspot] below) goes through the factory INDEPENDENT of the toggle.
+    // phone-hotspot route ([isBleHotspot] below) goes through the factory INDEPENDENT of `preferFactory`.
 
     /**
      * The phone-hotspot model(s) whose dash needs the factory's Wi-Fi-Direct + BLE `PhoneHotspotTransport`:
@@ -207,8 +208,19 @@ object CfmotoConnect {
      *
      * Uses applicationContext + the process-global prober (not this activity) so the hand-off
      * completes even if the activity is destroyed/recreated after it was armed.
+     *
+     * [preferFactory] (off the Android-Auto path only) routes a SoftAP/P2P join through the connection
+     * factory instead of the classic path — the cockpit's own connection opts in; every legacy/auto/mirror
+     * call keeps the default false and runs the classic path byte-for-byte. Ignored when [gateOnAaSteady]
+     * is true (AA never uses the factory) and for the Rieju phone-hotspot route (factory-only regardless).
      */
-    fun joinWifi(context: Context, qr: QrData, gateOnAaSteady: Boolean, activity: Activity? = null) {
+    fun joinWifi(
+        context: Context,
+        qr: QrData,
+        gateOnAaSteady: Boolean,
+        activity: Activity? = null,
+        preferFactory: Boolean = false,
+    ) {
         // Wi‑Fi must be on. Foreground (activity present) shows a modal; the background service path
         // (activity == null) posts a notification instead — the ONE genuine Activity dependency here.
         val wifiReady = if (activity != null) WifiGate.ensureEnabledOrPrompt(activity)
@@ -240,12 +252,13 @@ object CfmotoConnect {
             return
         }
         // Everything past this point is a SoftAP- or P2P-capable QR (phone-hotspot already returned above).
-        // DEV A/B toggle (default OFF = classic below runs byte-for-byte): route SoftAP/P2P through the
-        // factory, but ONLY off the Android-Auto path — the factory doesn't implement the gateOnAaSteady
-        // hand-off, so AA connects stay classic regardless of the toggle (flip-work-design.md §6). Retain the
-        // handle in BikeConnectionHolder BEFORE connect() so teardown and Wi-Fi re-acquire can always find it.
-        if (!gateOnAaSteady && AppSettings.useConnectionFactory(context)) {
-            LogBus.log("→ [FACTORY] joinWifi: routing '${qr.ssid}' via factory (dev toggle; non-AA path)")
+        // PER-CALLER factory route (default false = classic below runs byte-for-byte): the caller passes
+        // preferFactory=true (the cockpit's own connection) to route SoftAP/P2P through the factory, but
+        // ONLY off the Android-Auto path — the factory doesn't implement the gateOnAaSteady hand-off, so AA
+        // connects stay classic regardless (flip-work-design.md §6). Retain the handle in
+        // BikeConnectionHolder BEFORE connect() so teardown and Wi-Fi re-acquire can always find it.
+        if (!gateOnAaSteady && preferFactory) {
+            LogBus.log("→ [FACTORY] joinWifi: routing '${qr.ssid}' via factory (preferFactory; non-AA path)")
             val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
             BikeConnectionHolder.set(conn)
             conn.connect()
@@ -542,8 +555,12 @@ object CfmotoConnect {
      * WITHOUT the classic MainActivity UI. This is the CFMOTO/wantBike branch of MainActivity's
      * `beginGpxProjection()`, moved verbatim. The cockpit must have armed the session first
      * (`GpxSession.prepareFreeRide()`), so [GpxSession.active] is already set here.
+     *
+     * [preferFactory] is forwarded to [joinWifi]: the interactive cockpit connect passes true so its own
+     * SoftAP/P2P connection runs through the connection factory; the background/foreground AUTO-connect
+     * callers keep the default false (classic path, unchanged).
      */
-    fun startCfmotoMap(activity: Activity) {
+    fun startCfmotoMap(activity: Activity, preferFactory: Boolean = false) {
         if (!GpxSession.active) {
             // Cockpit is expected to call GpxSession.prepareFreeRide() first; if not, do nothing harmful.
             LogBus.log("→ Map: nothing prepared — open Map / GPX first")
@@ -564,7 +581,7 @@ object CfmotoConnect {
         tearDownForModeSwitch(activity, clearMap = false, clearMirror = true)
         applyProfile(activity, saved)
         ConnectionState.set(Phase.MIRRORING, BikeMemory.lastBikeName(activity) ?: saved.ssid)
-        joinWifi(activity, saved, gateOnAaSteady = false, activity = activity)
+        joinWifi(activity, saved, gateOnAaSteady = false, activity = activity, preferFactory = preferFactory)
     }
 
     // ---- Auto-connect (background CompanionDeviceService + foreground cockpit fallback) ----

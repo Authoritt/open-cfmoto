@@ -15,7 +15,7 @@ class OpenCfMotoApp : Application() {
     override fun onCreate() {
         super.onCreate()
         // Bike-connection-factory platform seam (connection.factory.PlatformIO — used by the factory route,
-        // gated by the AppSettings.useConnectionFactory dev toggle + the Rieju phone-hotspot path). install()
+        // taken by the cockpit's own connect (joinWifi preferFactory=true) + the Rieju phone-hotspot path). install()
         // gives it the application Context; the lifecycle
         // callbacks feed activityOrNull() the current foreground Activity from ONE place — no per-Activity
         // onResume/onPause overrides — so it tracks CockpitActivity, the classic MainActivity, or any

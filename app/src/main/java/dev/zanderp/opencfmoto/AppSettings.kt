@@ -30,7 +30,6 @@ object AppSettings {
     private const val KEY_ANON_TELEMETRY = "anonymous_telemetry"
     private const val KEY_BT_CLOCK = "bluetooth_clock_sync"
     private const val KEY_KEEP_WIFI = "keep_wifi_after_disconnect"
-    private const val KEY_USE_FACTORY = "dev_use_connection_factory"
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -93,18 +92,6 @@ object AppSettings {
     fun keepWifiAfterDisconnect(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_KEEP_WIFI, false)
     fun setKeepWifiAfterDisconnect(ctx: Context, on: Boolean) =
         prefs(ctx).edit().putBoolean(KEY_KEEP_WIFI, on).apply()
-
-    /**
-     * DEV A/B (default OFF = classic): route the 450NK SoftAP/P2P connect through the connection factory
-     * ([dev.zanderp.opencfmoto.connection.factory.DefaultBikeConnection]) instead of the proven
-     * `joinWifiP2p` / `BikeWifi.reuseOrJoin` + prober path. Synchronous SharedPreferences on purpose — it is
-     * read on `CfmotoConnect.joinWifi`'s hot path, which `SettingsStore`'s async Flow can't serve. Scoped to
-     * the non-Android-Auto path; the Rieju phone-hotspot connector routes to the factory independently of this.
-     * See `flip-work-design.md` §6.
-     */
-    fun useConnectionFactory(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_USE_FACTORY, false)
-    fun setUseConnectionFactory(ctx: Context, on: Boolean) =
-        prefs(ctx).edit().putBoolean(KEY_USE_FACTORY, on).apply()
 
     fun anonymousTelemetry(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_ANON_TELEMETRY, true)
     fun setAnonymousTelemetry(ctx: Context, on: Boolean) {

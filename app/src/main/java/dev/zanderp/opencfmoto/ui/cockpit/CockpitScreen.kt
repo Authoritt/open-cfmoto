@@ -7,7 +7,6 @@
 // powers: an in-cockpit search and a locate-me/follow button. Our own Android-Auto — phone free.
 package dev.zanderp.opencfmoto.ui.cockpit
 
-import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,12 +50,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
-import dev.zanderp.opencfmoto.GpxActivity
+import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.DashRemote
 import dev.zanderp.opencfmoto.GpxNav
 import dev.overtake.maps.RendererKind
 import dev.overtake.maps.contract.MapRenderer
 import dev.zanderp.opencfmoto.GpxSession
+import dev.zanderp.opencfmoto.connection.CfmotoConnect
 import dev.zanderp.opencfmoto.cockpit.CallState
 import dev.zanderp.opencfmoto.cockpit.NavGuidance
 import dev.zanderp.opencfmoto.overtakeOffline
@@ -137,7 +137,21 @@ fun CockpitScreen(nav: NavController) {
             MapProvider.WAZE ->
                 if (d.isEmpty()) NavLauncher.openWaze(ctx, LogBus::log)
                 else NavLauncher.navigateWaze(ctx, d, LogBus::log)
-            else -> ctx.startActivity(Intent(ctx, GpxActivity::class.java)) // Propio / Espejo → own map hub
+            else -> {
+                // Propio (built-in map): CONNECT + project our own map to the dash IN-PLACE via the connection
+                // factory — no GpxActivity/MainActivity bridge (which would flash the classic UI). Same direct
+                // path as the Dashboard's Conectar. (BUILTIN normally uses the in-cockpit search, which never
+                // calls route(); this is the fallback if a dialog ever routes a Propio destination here.)
+                val activity = ctx.findActivity()
+                when {
+                    activity == null -> LogBus.log("[cockpit] Conectar: sin Activity host — no se puede conectar")
+                    BikeMemory.lastQr(ctx) == null -> nav.navigate(Routes.SCAN)
+                    else -> {
+                        GpxSession.prepareFreeRide()
+                        CfmotoConnect.startCfmotoMap(activity, preferFactory = true)
+                    }
+                }
+            }
         }
     }
 

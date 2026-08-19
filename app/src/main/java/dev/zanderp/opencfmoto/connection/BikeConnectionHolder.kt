@@ -5,6 +5,9 @@ package dev.zanderp.opencfmoto.connection
 
 import android.net.Network
 import dev.zanderp.opencfmoto.connection.factory.BikeConnection
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * The one live factory-built [BikeConnection] (mirrors `ProjectionHolder` / `BikeLink` process-globals; see
@@ -15,14 +18,21 @@ import dev.zanderp.opencfmoto.connection.factory.BikeConnection
  * `BikeConnectionFactory.create` keeps returning the interface.
  */
 object BikeConnectionHolder {
-    @Volatile
-    var connection: BikeConnection? = null
-        private set
+    // Backed by a StateFlow so the Compose cockpit gauge can react the instant a factory connection appears
+    // or clears (a plain @Volatile var isn't observable, and the holder is set AFTER ConnectionState flips to
+    // JOINING_WIFI, so the UI can't key off the phase). Thread-safe reads/writes via the StateFlow.
+    private val _connection = MutableStateFlow<BikeConnection?>(null)
+
+    /** Reactive view of the live factory connection (null = none) — for the cockpit's connection gauge. */
+    val connectionFlow: StateFlow<BikeConnection?> = _connection.asStateFlow()
+
+    /** The one live factory-built connection, or null. Read-only snapshot of [connectionFlow]. */
+    val connection: BikeConnection? get() = _connection.value
 
     /** Replace any prior live connection (defensive: callers always tear down first); await the prior's release. */
     fun set(c: BikeConnection) {
-        val prev = connection
-        connection = c
+        val prev = _connection.value
+        _connection.value = c
         prev?.disconnectAndAwaitTeardown()
     }
 
@@ -34,14 +44,14 @@ object BikeConnectionHolder {
      * when null ⇒ the OFF/classic path is unaffected (byte-for-byte).
      */
     fun disconnectAndClear() {
-        val c = connection
-        connection = null
+        val c = _connection.value
+        _connection.value = null
         c?.disconnectAndAwaitTeardown()
     }
 
     /** SoftAP re-acquire hinge (design §2): drive the live factory connection's own re-establish. No-op when
      *  null. This is the single path `BikeLink.onWifiReacquired`'s fork calls (review M4). */
     fun onWifiReacquired(network: Network?) {
-        connection?.onWifiReacquired(network)
+        _connection.value?.onWifiReacquired(network)
     }
 }

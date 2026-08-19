@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -50,7 +51,10 @@ import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.ConnectionState
 import dev.zanderp.opencfmoto.ControlsActivity
 import dev.zanderp.opencfmoto.GpxSession
+import dev.zanderp.opencfmoto.Phase
+import dev.zanderp.opencfmoto.connection.BikeConnectionHolder
 import dev.zanderp.opencfmoto.connection.CfmotoConnect
+import dev.zanderp.opencfmoto.connection.factory.ConnState
 import dev.zanderp.opencfmoto.HudViewActivity
 import dev.zanderp.opencfmoto.QrScanActivity
 import dev.zanderp.opencfmoto.TripsListActivity
@@ -67,6 +71,7 @@ import dev.zanderp.opencfmoto.ui.components.StatusKind
 import dev.zanderp.opencfmoto.ui.components.Tile
 import dev.zanderp.opencfmoto.ui.components.kind
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 // LocalContext inside CockpitActivity's setContent is the Activity today, but unwrap defensively so a
@@ -84,11 +89,38 @@ fun DashboardScreen(nav: NavController) {
     val store = remember { SettingsStore(ctx.applicationContext) }
     val scope = rememberCoroutineScope()
     val snap by ConnectionState.flow.collectAsStateWithLifecycle()
+    // The connection factory (the cockpit's own connect, preferFactory=true) drives its OWN ConnState during the
+    // PRE-projection phases — while the classic ConnectionState is still parked at JOINING_WIFI. Observe it
+    // reactively (null when no factory connection is live) so the gauge shows real Conectando…/Reconectando…/Error
+    // detail; once the prober flips ConnectionState to STREAMING/MIRRORING (or a classic terminal state) the phase
+    // label is authoritative again and wins.
+    val factoryConn by BikeConnectionHolder.connectionFlow.collectAsStateWithLifecycle()
+    val factoryState by produceState<ConnState?>(initialValue = null, factoryConn) {
+        value = null
+        factoryConn?.state?.collect { value = it }
+    }
     val autoOn by store.autoConnect.collectAsStateWithLifecycle(initialValue = false)
     val prompted by store.autoConnectPrompted.collectAsStateWithLifecycle(initialValue = false)
     val provider by store.mapProvider.collectAsStateWithLifecycle(initialValue = MapProvider.BUILTIN)
-    val kind = snap.phase.kind()
-    val statusText = stringResource(snap.phase.labelRes)
+    // Projection live (or a classic terminal state) → the ConnectionState phase is authoritative; otherwise
+    // the factory's pre-projection ConnState wins (Idle/none falls through to the phase label).
+    val projecting = snap.phase == Phase.STREAMING || snap.phase == Phase.MIRRORING ||
+        snap.phase == Phase.ERROR || snap.phase == Phase.STOPPED
+    val fs = factoryState?.takeIf { !projecting && it != ConnState.Idle }
+    val kind = when (fs) {
+        is ConnState.Error -> StatusKind.FAULT
+        is ConnState.Connected -> StatusKind.LIVE
+        is ConnState.Connecting, is ConnState.Retrying -> StatusKind.BUSY
+        else -> snap.phase.kind()
+    }
+    val statusText = when (fs) {
+        is ConnState.Connecting -> stringResource(R.string.conn_joining_wifi)
+        is ConnState.Connected -> stringResource(R.string.conn_pxc_connecting)
+        is ConnState.Retrying -> stringResource(R.string.conn_reconnecting)
+        is ConnState.Error -> stringResource(R.string.conn_error) +
+            if (fs.reason.isNotBlank()) " — ${fs.reason}" else ""
+        else -> stringResource(snap.phase.labelRes)
+    }
     val bikeName = remember { BikeMemory.lastBikeName(ctx) ?: ctx.getString(R.string.ovk_no_bike_paired) }
     val hasBike = remember { BikeMemory.lastQr(ctx) != null }
 
@@ -120,9 +152,11 @@ fun DashboardScreen(nav: NavController) {
         // the cockpit (which already reflects ConnectionState.flow) — the classic MainActivity UI never
         // shows. prepareFreeRide arms the session; CfmotoConnect.startCfmotoMap runs the proven connect
         // path (join bike Wi-Fi + project own content, no Android Auto). Fixes "Conectar opens the map menu".
+        // preferFactory = true: the cockpit owns its SoftAP/P2P connection via the connection factory
+        // (reconnect + teardown parity), never the global dev toggle (removed). AA / auto-connect stay classic.
         GpxSession.prepareFreeRide()
         val activity = ctx.findActivity() ?: return
-        CfmotoConnect.startCfmotoMap(activity)
+        CfmotoConnect.startCfmotoMap(activity, preferFactory = true)
     }
     fun afterMode(mode: String) {
         if (!prompted) showConsent = true else execute(mode)
