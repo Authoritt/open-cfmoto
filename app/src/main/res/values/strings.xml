@@ -716,6 +716,24 @@
     <string name="ovk_garage_no_map">NO DEFAULT</string>
     <string name="ovk_dlg_map_title">Default map for %1$s?</string>
     <string name="ovk_garage_map_subtitle">Seeds the Map screen for this bike. Change anytime.</string>
+    <!-- garage/scan: per-bike connection mechanism (ConnectorChoice) -->
+    <string name="ovk_garage_conn_label">Connection</string>
+    <string name="ovk_dlg_conn_title">How does %1$s connect?</string>
+    <string name="ovk_garage_conn_subtitle">Auto-detected. Pin one here only if your bike needs a specific one.</string>
+    <string name="ovk_conn_detected">Detected: %1$s</string>
+    <string name="ovk_conn_auto">Automatic</string>
+    <string name="ovk_conn_softap">CFMoto Wi-Fi</string>
+    <string name="ovk_conn_p2p">CFMoto Direct</string>
+    <string name="ovk_conn_rieju">Rieju</string>
+    <string name="ovk_conn_tether">Manual hotspot</string>
+    <string name="ovk_conn_opt_auto">Automatic (detected)</string>
+    <string name="ovk_conn_opt_softap">CFMoto Wi-Fi (SoftAP)</string>
+    <string name="ovk_conn_opt_p2p">CFMoto Direct (P2P)</string>
+    <string name="ovk_conn_opt_rieju">Rieju (Wi-Fi Direct + BLE)</string>
+    <string name="ovk_conn_softap_desc">The dash\'s own Wi-Fi network</string>
+    <string name="ovk_conn_p2p_desc">The dash\'s Wi-Fi Direct</string>
+    <string name="ovk_conn_rieju_desc">Wi-Fi Direct + Bluetooth</string>
+    <string name="ovk_conn_tether_desc">Share the phone\'s hotspot</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Camera permission required</string>
     <string name="ovk_scan_perm_body">to scan the dash QR</string>
@@ -723,6 +741,8 @@
     <string name="ovk_scan_aim">Point at the dash QR</string>
     <string name="ovk_scan_photo">Photo</string>
     <string name="ovk_scan_manual_wifi">Enter Wi-Fi manually</string>
+    <string name="ovk_scan_paired">Bike paired</string>
+    <string name="ovk_scan_done">Done</string>
     <!-- settings screen -->
     <string name="ovk_settings_title">Settings</string>
     <string name="ovk_settings_group_connection">Connection</string>

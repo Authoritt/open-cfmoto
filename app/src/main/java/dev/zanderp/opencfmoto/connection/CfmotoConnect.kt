@@ -47,6 +47,7 @@ import dev.zanderp.opencfmoto.WifiGate
 import dev.zanderp.opencfmoto.WifiTransport
 import dev.zanderp.opencfmoto.ConnectionState
 import dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory
+import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
 
 /**
@@ -229,6 +230,28 @@ object CfmotoConnect {
         else WifiGate.ensureEnabledOrNotify(context)
         if (!wifiReady) return
         ConnectionState.set(Phase.JOINING_WIFI)
+        // Per-bike rider OVERRIDE (Garage/Scan). Only consulted on the SAME factory-eligible path as the
+        // preferFactory route below (non-AA, own-map connect); on the legacy (preferFactory=false) and AA
+        // (gateOnAaSteady=true) paths `choice` is AUTO by construction, so those fall straight through to the
+        // existing routing byte-for-byte. AUTO here also falls through unchanged — an explicit choice short-
+        // circuits: the three factory connectors (spec.mode already forced by setConnectorChoice) go through
+        // BikeConnectionFactory; TETHER takes the classic manual-tether path.
+        val choice = if (!gateOnAaSteady && preferFactory) BikeMemory.connectorChoice(context, qr.ssid) else ConnectorChoice.AUTO
+        when (choice) {
+            ConnectorChoice.SOFT_AP, ConnectorChoice.P2P, ConnectorChoice.RIEJU_BLE -> {
+                LogBus.log("→ [FACTORY] joinWifi: rider-pinned '$choice' for '${qr.ssid}' → factory (spec.mode forced)")
+                val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
+                BikeConnectionHolder.set(conn)
+                conn.connect()
+                return
+            }
+            ConnectorChoice.TETHER -> {
+                LogBus.log("→ joinWifi: rider-pinned TETHER for '${qr.ssid}' → classic phone-hotspot tether")
+                joinPhoneHotspot(context, qr, gateOnAaSteady, activity)
+                return
+            }
+            ConnectorChoice.AUTO -> { /* fall through to the existing auto logic, UNCHANGED */ }
+        }
         val transport = AppSettings.transport(context)
         // Phone-hosts-hotspot (Carbit action=128 / no SoftAP pwd): dash joins the phone.
         if (qr.supportsPhoneHotspot && qr.pwd.isEmpty()) {

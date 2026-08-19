@@ -2,6 +2,7 @@ package dev.zanderp.opencfmoto
 
 import android.content.SharedPreferences
 import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
+import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
 import dev.zanderp.opencfmoto.connection.factory.fromQr
 import org.junit.Assert.assertEquals
@@ -108,6 +109,101 @@ class BikeMemoryTest {
         // The learned winner must survive — the old mirror silently rewrote "AP" → "P2P", forcing the next
         // auto-connect to try P2P at the full timeout.
         assertEquals("AP", BikeMemory.winningTransport(prefs, "DIRECT-ab"))
+    }
+
+    // ---- ConnectorChoice: per-bike connection MECHANISM override (default AUTO leaves today's behavior) ----
+
+    @Test fun `connectorChoice defaults to AUTO when never set`() {
+        val prefs = FakeSharedPreferences()
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+    }
+
+    @Test fun `connectorChoice defaults to AUTO for a blank ssid`() {
+        val prefs = FakeSharedPreferences()
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, ""))
+    }
+
+    @Test fun `setConnectorChoice persists and connectorChoice reads it back`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234")
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.P2P)
+        assertEquals(ConnectorChoice.P2P, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+    }
+
+    @Test fun `setConnectorChoice with a blank ssid is a no-op (writes nothing)`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "", mac = "AA:AA:AA:AA:AA:AA")
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.SOFT_AP)
+        assertEquals("a blank-ssid connector choice must not write anything", 0, prefs.size)
+    }
+
+    @Test fun `setConnectorChoice(SOFT_AP) forces the stored spec mode to SOFT_AP`() {
+        val prefs = FakeSharedPreferences()
+        // A DIRECT-* P2P bike (fromQr mode = P2P) — the SoftAP override must flip the stored spec.mode.
+        val q = qr(action = 8, ssid = "DIRECT-ab")
+        assertEquals(TransportKind.P2P, ConnectionSpec.fromQr(q).mode) // guard the premise
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.SOFT_AP)
+
+        assertEquals(TransportKind.SOFT_AP, BikeMemory.specFor(prefs, q)?.mode)
+    }
+
+    @Test fun `setConnectorChoice(P2P) forces the stored spec mode to P2P`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234")
+        assertEquals(TransportKind.SOFT_AP, ConnectionSpec.fromQr(q).mode) // guard the premise
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.P2P)
+
+        assertEquals(TransportKind.P2P, BikeMemory.specFor(prefs, q)?.mode)
+    }
+
+    @Test fun `setConnectorChoice(RIEJU_BLE) forces PHONE_HOTSPOT even for a SoftAP QR (deliberate override)`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234") // a plain SoftAP QR, not phone-hotspot-shaped
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.RIEJU_BLE)
+
+        assertEquals(TransportKind.PHONE_HOTSPOT, BikeMemory.specFor(prefs, q)?.mode)
+        assertEquals(ConnectorChoice.RIEJU_BLE, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+    }
+
+    @Test fun `setConnectorChoice(TETHER) records the choice but leaves spec mode untouched`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234")
+        BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(q).copy(lastEndpointHint = "192.168.1.9"))
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
+
+        assertEquals(ConnectorChoice.TETHER, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        // TETHER routes the classic tether — spec.mode (and the rest of the spec) must not change.
+        assertEquals(TransportKind.SOFT_AP, BikeMemory.specFor(prefs, q)?.mode)
+        assertEquals("192.168.1.9", BikeMemory.specFor(prefs, q)?.lastEndpointHint)
+    }
+
+    @Test fun `setConnectorChoice(AUTO) clears an override — spec mode back to fromQr, choice back to AUTO`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234") // fromQr mode = SOFT_AP
+        // Rider first pins P2P (spec.mode → P2P), then returns to Automatic.
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.P2P)
+        assertEquals(TransportKind.P2P, BikeMemory.specFor(prefs, q)?.mode)
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.AUTO)
+
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        assertEquals(TransportKind.SOFT_AP, BikeMemory.specFor(prefs, q)?.mode) // reset to the fromQr guess
+    }
+
+    @Test fun `setConnectorChoice keeps other spec fields when forcing the mode (reuses the existing spec)`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234")
+        BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(q).copy(lastEndpointHint = "10.0.0.1"))
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.P2P)
+
+        val spec = BikeMemory.specFor(prefs, q)
+        assertEquals(TransportKind.P2P, spec?.mode)
+        assertEquals("10.0.0.1", spec?.lastEndpointHint)
     }
 }
 

@@ -64,8 +64,14 @@ import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.ManualWifiPairing
 import dev.zanderp.opencfmoto.QrData
+import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
+import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
+import dev.zanderp.opencfmoto.connection.factory.fromQr
 import dev.zanderp.opencfmoto.ui.components.GhostButton
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
+import dev.zanderp.opencfmoto.ui.connection.ConnectorChoiceDialog
+import dev.zanderp.opencfmoto.ui.connection.connectorShortLabel
+import dev.zanderp.opencfmoto.ui.connection.detectedTransportToken
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -86,13 +92,18 @@ fun ScanScreen(nav: NavController) {
     val executor = remember { Executors.newSingleThreadExecutor() }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var zoom by remember { mutableStateOf(1f) }
+    // After a successful scan we surface the DETECTED connector + an override picker before leaving (the
+    // durable home for this is the Garage). Null = still scanning → the scan controls show as before.
+    var pairedQr by remember { mutableStateOf<QrData?>(null) }
+    var showConnectorPicker by remember { mutableStateOf(false) }
+    var connectorRefresh by remember { mutableStateOf(0) }
     DisposableEffect(Unit) { onDispose { executor.shutdown(); runCatching { scanner.close() } } }
 
     fun onQr(raw: String) {
         val qr = QrData.parse(raw)
         if (qr != null) {
             BikeMemory.save(ctx, raw, qr)
-            nav.popBackStack()
+            pairedQr = qr // show the connection confirm/override step instead of leaving immediately
         } else {
             handled.set(false)
         }
@@ -173,26 +184,73 @@ fun ScanScreen(nav: NavController) {
             }
         }
 
-        // Bottom controls
-        Column(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(stringResource(R.string.ovk_scan_aim), color = c.ink, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ZoomPill("1×", zoom == 1f) { setZoom(1f) }
-                ZoomPill("2×", zoom == 2f) { setZoom(2f) }
-                ZoomPill("3×", zoom == 3f) { setZoom(3f) }
-                ZoomPill("◲ " + stringResource(R.string.ovk_scan_photo), false) { handled.set(false); photoLauncher.launch("image/*") }
-            }
-            GhostButton(stringResource(R.string.ovk_scan_manual_wifi), {
-                (ctx as? AppCompatActivity)?.let { act ->
-                    ManualWifiPairing.show(act) { raw, _ ->
-                        if (handled.compareAndSet(false, true)) onQr(raw)
-                    }
+        // Bottom controls — hidden once a bike is paired (the connection confirm step takes over).
+        if (pairedQr == null) {
+            Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(stringResource(R.string.ovk_scan_aim), color = c.ink, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ZoomPill("1×", zoom == 1f) { setZoom(1f) }
+                    ZoomPill("2×", zoom == 2f) { setZoom(2f) }
+                    ZoomPill("3×", zoom == 3f) { setZoom(3f) }
+                    ZoomPill("◲ " + stringResource(R.string.ovk_scan_photo), false) { handled.set(false); photoLauncher.launch("image/*") }
                 }
-            }, Modifier.fillMaxWidth())
+                GhostButton(stringResource(R.string.ovk_scan_manual_wifi), {
+                    (ctx as? AppCompatActivity)?.let { act ->
+                        ManualWifiPairing.show(act) { raw, _ ->
+                            if (handled.compareAndSet(false, true)) onQr(raw)
+                        }
+                    }
+                }, Modifier.fillMaxWidth())
+            }
+        }
+
+        // Connection confirm/override: show the detected connector and let the rider pin one before leaving.
+        pairedQr?.let { qr ->
+            val current = remember(connectorRefresh) { BikeMemory.connectorChoice(ctx, qr.ssid) }
+            val detected = remember(qr) { ConnectionSpec.fromQr(qr).mode }
+            val choiceLabel = connectorShortLabel(current)
+            val affordance = if (current == ConnectorChoice.AUTO) {
+                "$choiceLabel (${detectedTransportToken(detected)})"
+            } else {
+                choiceLabel
+            }
+            Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MonoLabel(stringResource(R.string.ovk_scan_paired), color = c.inkDim)
+                Row(
+                    Modifier.clip(RoundedCornerShape(999.dp)).background(c.surface1).border(1.dp, c.line, RoundedCornerShape(999.dp)).clickable { showConnectorPicker = true }.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.ovk_garage_conn_label) + ": " + affordance + "  ▾",
+                        color = c.ink, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                    )
+                }
+                GhostButton(stringResource(R.string.ovk_scan_done), { nav.popBackStack() }, Modifier.fillMaxWidth())
+            }
+        }
+
+        if (showConnectorPicker) {
+            pairedQr?.let { qr ->
+                ConnectorChoiceDialog(
+                    bikeName = qr.name?.takeIf { it.isNotBlank() } ?: qr.ssid,
+                    current = BikeMemory.connectorChoice(ctx, qr.ssid),
+                    detected = ConnectionSpec.fromQr(qr).mode,
+                    onPick = { picked ->
+                        BikeMemory.setConnectorChoice(ctx, qr, picked)
+                        connectorRefresh++
+                        showConnectorPicker = false
+                    },
+                    onDismiss = { showConnectorPicker = false },
+                )
+            }
         }
     }
 }

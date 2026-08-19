@@ -698,6 +698,24 @@
     <string name="ovk_garage_saved">guardada</string>
     <string name="ovk_garage_no_mode">SIN MODO</string>
     <string name="ovk_garage_mode_subtitle">Se elige una vez por moto. Editable aquí cuando quieras.</string>
+    <!-- garage/scan: mecanismo de conexión por moto (ConnectorChoice) -->
+    <string name="ovk_garage_conn_label">Conexión</string>
+    <string name="ovk_dlg_conn_title">¿Cómo se conecta %1$s?</string>
+    <string name="ovk_garage_conn_subtitle">Se detecta sola. Fíjala aquí solo si tu moto necesita una en concreto.</string>
+    <string name="ovk_conn_detected">Detectado: %1$s</string>
+    <string name="ovk_conn_auto">Automático</string>
+    <string name="ovk_conn_softap">CFMoto Wi-Fi</string>
+    <string name="ovk_conn_p2p">CFMoto Directo</string>
+    <string name="ovk_conn_rieju">Rieju</string>
+    <string name="ovk_conn_tether">Hotspot manual</string>
+    <string name="ovk_conn_opt_auto">Automático (detectado)</string>
+    <string name="ovk_conn_opt_softap">CFMoto Wi-Fi (SoftAP)</string>
+    <string name="ovk_conn_opt_p2p">CFMoto Directo (P2P)</string>
+    <string name="ovk_conn_opt_rieju">Rieju (Wi-Fi Direct + BLE)</string>
+    <string name="ovk_conn_softap_desc">La red Wi-Fi del propio tablero</string>
+    <string name="ovk_conn_p2p_desc">El Wi-Fi Directo del tablero</string>
+    <string name="ovk_conn_rieju_desc">Wi-Fi Directo + Bluetooth</string>
+    <string name="ovk_conn_tether_desc">Comparte el hotspot del teléfono</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Permiso de cámara necesario</string>
     <string name="ovk_scan_perm_body">para escanear el QR del tablero</string>
@@ -705,6 +723,8 @@
     <string name="ovk_scan_aim">Apunta al QR del tablero</string>
     <string name="ovk_scan_photo">Foto</string>
     <string name="ovk_scan_manual_wifi">Ingresar Wi-Fi manualmente</string>
+    <string name="ovk_scan_paired">Moto vinculada</string>
+    <string name="ovk_scan_done">Listo</string>
     <!-- settings screen -->
     <string name="ovk_settings_title">Ajustes</string>
     <string name="ovk_settings_group_connection">Conexión</string>

@@ -46,9 +46,13 @@ import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.QrScanActivity
 import dev.zanderp.opencfmoto.SavedBike
 import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
+import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
+import dev.zanderp.opencfmoto.connection.factory.TransportKind
 import dev.zanderp.opencfmoto.connection.factory.fromQr
 import dev.zanderp.opencfmoto.settings.MapProvider
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
+import dev.zanderp.opencfmoto.ui.connection.ConnectorChoiceDialog
+import dev.zanderp.opencfmoto.ui.connection.connectorShortLabel
 import dev.zanderp.opencfmoto.ui.settings.Header
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 
@@ -61,6 +65,7 @@ fun GarageScreen(nav: NavController) {
     var refresh by remember { mutableStateOf(0) }
     var modeFor by remember { mutableStateOf<SavedBike?>(null) }
     var providerFor by remember { mutableStateOf<SavedBike?>(null) }
+    var connectorFor by remember { mutableStateOf<SavedBike?>(null) }
 
     Column(
         Modifier.fillMaxSize().background(c.ground).verticalScroll(rememberScrollState()).padding(16.dp),
@@ -77,6 +82,7 @@ fun GarageScreen(nav: NavController) {
                     bike, current = bike.raw == selected, refreshKey = refresh,
                     onModeClick = { modeFor = bike },
                     onProviderClick = { providerFor = bike },
+                    onConnectorClick = { connectorFor = bike },
                 )
             }
         }
@@ -125,6 +131,25 @@ fun GarageScreen(nav: NavController) {
             onDismiss = { providerFor = null },
         )
     }
+
+    connectorFor?.let { bike ->
+        val qr = bike.qr
+        val current = remember(bike.raw, refresh) { BikeMemory.connectorChoice(ctx, qr?.ssid ?: "") }
+        // The detected hint needs a mode; a corrupt/legacy entry with no parseable QR has none — fall back
+        // to SOFT_AP purely for the hint (onPick is a no-op for it, like the map/mode dialogs above).
+        val detected = remember(bike.raw) { qr?.let { ConnectionSpec.fromQr(it).mode } ?: TransportKind.SOFT_AP }
+        ConnectorChoiceDialog(
+            bikeName = bike.name,
+            current = current,
+            detected = detected,
+            onPick = { picked ->
+                qr?.let { BikeMemory.setConnectorChoice(ctx, it, picked) }
+                refresh++
+                connectorFor = null
+            },
+            onDismiss = { connectorFor = null },
+        )
+    }
 }
 
 @Composable
@@ -134,12 +159,14 @@ private fun BikeRow(
     refreshKey: Int,
     onModeClick: () -> Unit,
     onProviderClick: () -> Unit,
+    onConnectorClick: () -> Unit,
 ) {
     val c = LocalCockpitColors.current
     val ctx = LocalContext.current
     val ssid = remember(bike.raw) { bike.qr?.ssid ?: "" }
     val mode = remember(bike.raw, refreshKey) { BikeMemory.bikeMode(ctx, ssid) }
     val provider = remember(bike.raw, refreshKey) { bike.qr?.let { BikeMemory.specFor(ctx, it)?.defaultMapProvider } }
+    val connector = remember(bike.raw, refreshKey) { BikeMemory.connectorChoice(ctx, ssid) }
     val borderColor = if (current) c.ignition.copy(alpha = 0.45f) else c.line
     Row(
         // The row itself still opens the mode picker (unchanged tap target/hint); the map tag below is
@@ -169,6 +196,11 @@ private fun BikeRow(
                 text = provider?.let { mapProviderLabel(ctx, it) } ?: stringResource(R.string.ovk_garage_no_map),
                 onClick = onProviderClick,
             )
+            ConnectorTag(
+                text = connectorShortLabel(connector),
+                pinned = connector != ConnectorChoice.AUTO,
+                onClick = onConnectorClick,
+            )
         }
     }
 }
@@ -191,6 +223,19 @@ private fun ProviderTag(text: String, onClick: () -> Unit) {
     Box(
         Modifier.clip(RoundedCornerShape(6.dp)).background(c.ground).border(1.dp, c.line, RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(horizontal = 7.dp, vertical = 3.dp),
     ) { Text(text, color = c.inkFaint, fontFamily = FontFamily.Monospace, fontSize = 9.sp) }
+}
+
+/** The per-bike connection MECHANISM (own small tap target). Accented when the rider has PINNED a
+ *  non-Automatic choice, so an override reads at a glance; faint when left on Automatic. */
+@Composable
+private fun ConnectorTag(text: String, pinned: Boolean, onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    val fg = if (pinned) c.ignition else c.inkFaint
+    val bg = if (pinned) c.ignition.copy(alpha = 0.12f) else c.ground
+    val bd = if (pinned) c.ignition.copy(alpha = 0.35f) else c.line
+    Box(
+        Modifier.clip(RoundedCornerShape(6.dp)).background(bg).border(1.dp, bd, RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(horizontal = 7.dp, vertical = 3.dp),
+    ) { Text(text, color = fg, fontFamily = FontFamily.Monospace, fontSize = 9.sp) }
 }
 
 // Brand names stay literal; only the MIRROR ("Espejo") label is translated — mirrors the labeling this

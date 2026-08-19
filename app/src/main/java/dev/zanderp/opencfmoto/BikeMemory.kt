@@ -3,6 +3,8 @@ package dev.zanderp.opencfmoto
 import android.content.Context
 import android.content.SharedPreferences
 import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
+import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
+import dev.zanderp.opencfmoto.connection.factory.TransportKind
 import dev.zanderp.opencfmoto.connection.factory.bikeIdFor
 import dev.zanderp.opencfmoto.connection.factory.fromQr
 import org.json.JSONArray
@@ -44,6 +46,12 @@ object BikeMemory {
     // Per-bike ConnectionSpec JSON (design doc 2026-08-18 §5), keyed by ConnectionSpec.bikeId
     // (QR mac, else ssid — see ConnectionSpec.bikeIdFor). Task 8.
     private const val KEY_SPEC_PREFIX = "spec_"
+
+    // Per-bike rider-chosen connection MECHANISM override (ConnectorChoice.name), keyed by the (stable)
+    // dash SSID like the mode/transport indexes. Absent/blank ⇒ AUTO (the app detects it) — so existing
+    // bikes behave exactly as today. An explicit FACTORY choice is ALSO mirrored into KEY_SPEC_PREFIX's
+    // spec.mode (see setConnectorChoice) because the factory selects the transport by spec.mode.
+    private const val KEY_CONNECTOR_PREFIX = "connector_"
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -199,6 +207,53 @@ object BikeMemory {
         // ONLY the spec — never the winningTransport index (see the public overload's KDoc). spec.mode is
         // frequently a fromQr guess; mirroring it here silently clobbered a real learned winner.
         prefs.edit().putString("$KEY_SPEC_PREFIX${spec.bikeId}", spec.toJson()).apply()
+    }
+
+    /**
+     * The rider's per-bike connection-mechanism override for [ssid], or [ConnectorChoice.AUTO] (the
+     * default) when never set / blank ssid / a corrupt value. Read on the connect hot path
+     * (`CfmotoConnect.joinWifi`) with the QR's own ssid, so it stays keyed by ssid like [bikeMode] /
+     * [winningTransport]. AUTO ⇒ the existing auto-detect path runs byte-for-byte.
+     */
+    fun connectorChoice(ctx: Context, ssid: String): ConnectorChoice = connectorChoice(prefs(ctx), ssid)
+
+    /** [SharedPreferences]-direct core of [connectorChoice] (test seam; see [specFor]'s KDoc). */
+    internal fun connectorChoice(prefs: SharedPreferences, ssid: String): ConnectorChoice {
+        if (ssid.isBlank()) return ConnectorChoice.AUTO
+        val raw = prefs.getString("$KEY_CONNECTOR_PREFIX$ssid", null) ?: return ConnectorChoice.AUTO
+        return runCatching { ConnectorChoice.valueOf(raw) }.getOrDefault(ConnectorChoice.AUTO)
+    }
+
+    /**
+     * Set (or clear, with [ConnectorChoice.AUTO]) the per-bike connection mechanism for the bike [qr]
+     * identifies. Takes the whole [QrData] — not just an ssid — because an explicit FACTORY connector must
+     * ALSO be reflected into the stored [ConnectionSpec.mode] (what `BikeConnectionFactory.selectTransport`
+     * reads): SOFT_AP→SOFT_AP, P2P→P2P, RIEJU_BLE→PHONE_HOTSPOT, reusing the bike's existing spec so a
+     * learned `lastEndpointHint`/`defaultMapProvider` survives. AUTO clears the override by resetting
+     * `spec.mode` back to the QR-derived guess ([ConnectionSpec.fromQr]) so detection runs fresh again;
+     * TETHER routes the classic tether and leaves `spec.mode` untouched. The connector index itself stays
+     * keyed by ssid (blank ssid ⇒ no-op, exactly like [setBikeMode]).
+     */
+    fun setConnectorChoice(ctx: Context, qr: QrData, choice: ConnectorChoice) =
+        setConnectorChoice(prefs(ctx), qr, choice)
+
+    /** [SharedPreferences]-direct core of [setConnectorChoice] (test seam; see [specFor]'s KDoc). */
+    internal fun setConnectorChoice(prefs: SharedPreferences, qr: QrData, choice: ConnectorChoice) {
+        val ssid = qr.ssid
+        if (ssid.isBlank()) return
+        prefs.edit().putString("$KEY_CONNECTOR_PREFIX$ssid", choice.name).apply()
+        // Reflect the choice in spec.mode so the factory picks the forced transport. TETHER routes classic,
+        // so it never touches spec.mode; the three factory connectors force their transport; AUTO resets to
+        // the fromQr guess to genuinely clear a prior override.
+        val forcedMode: TransportKind = when (choice) {
+            ConnectorChoice.SOFT_AP -> TransportKind.SOFT_AP
+            ConnectorChoice.P2P -> TransportKind.P2P
+            ConnectorChoice.RIEJU_BLE -> TransportKind.PHONE_HOTSPOT
+            ConnectorChoice.AUTO -> ConnectionSpec.fromQr(qr).mode
+            ConnectorChoice.TETHER -> return
+        }
+        val base = specFor(prefs, qr) ?: ConnectionSpec.fromQr(qr)
+        saveSpec(prefs, base.copy(mode = forcedMode))
     }
 
     // ---- convenience accessors used across the app (selected bike) ----
