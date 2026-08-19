@@ -75,8 +75,15 @@ object CfmotoConnect {
      * Flip only after an owner-in-the-loop SoftAP + P2P regression pass on the bike; instant rollback is
      * flipping this back.
      *
+     * SCOPE: this flag governs ONLY the 450NK SoftAP/P2P classic path. BLE-capable phone-hotspot QRs
+     * (Rieju/Carbit action=128 with a `bm=` mac, see [isBleHotspot]) ALREADY route through the factory's
+     * `PhoneHotspotTransport` in [joinWifi] REGARDLESS of this flag — the Rieju has no working classic path,
+     * and that connector keeps its own readable-creds manual fallback. So flipping this true does NOT change
+     * phone-hotspot routing; it only switches SoftAP/P2P over.
+     *
      * Before flipping true (the call site below is fire-and-forget — `.create(...).connect()`, instance
-     * discarded — so several lifecycle guarantees are NOT yet met):
+     * discarded — so several lifecycle guarantees are NOT yet met; the phone-hotspot path already lives with
+     * this trade-off deliberately for the owner test):
      *  (i)   Retain the [BikeConnection] handle and route teardown / mode-switch through its `disconnect()`.
      *        As written, with the flag ON `disconnect()` is unreachable, the driver parks at
      *        `events.receive()` forever, and a fresh per-instance scope leaks on every connect.
@@ -84,10 +91,20 @@ object CfmotoConnect {
      *        (Task-6 deferral) — without them nothing drives reconnect after a mid-ride drop.
      *  (iii) fromQr phone-hotspot gate reconciled with this router's `supportsPhoneHotspot && pwd.isEmpty()`
      *        ✓ (ConnectionSpec.fromQr).
-     *  (iv)  Honor [joinWifi]'s `gateOnAaSteady` hand-off (Android-Auto-gated connects still need the old
-     *        path) and the phone-hotspot transport (Task 9).
+     *  (iv)  Honor [joinWifi]'s `gateOnAaSteady` hand-off (Android-Auto-gated SoftAP/P2P connects still need
+     *        the old path). Phone-hotspot already routes through the factory, independent of this flag.
      */
     private const val USE_FACTORY = false
+
+    /**
+     * A BLE-capable phone-hosts-hotspot QR: phone-hotspot (`supportsPhoneHotspot && pwd.isEmpty()` — the
+     * classic gate) AND carrying a BLE MAC (`bm=`, e.g. the Rieju/Carbit action=128 case). These route to
+     * the factory's `PhoneHotspotTransport` (P2P group-owner + BLE B360 `0x52`); a phone-hotspot QR WITHOUT a
+     * mac has no dash to program over BLE, so it stays on the old manual tether assist ([joinPhoneHotspot]).
+     * Pure + `internal` so [joinWifi]'s routing decision is unit-testable without a live scan.
+     */
+    internal fun isBleHotspot(qr: QrData): Boolean =
+        qr.supportsPhoneHotspot && qr.pwd.isEmpty() && !qr.mac.isNullOrEmpty()
 
     /**
      * The process-global bike PXC client. Reuse [BikeLink.prober] if it already exists (e.g. the AA
@@ -204,8 +221,24 @@ object CfmotoConnect {
         if (!wifiReady) return
         ConnectionState.set(Phase.JOINING_WIFI)
         val transport = AppSettings.transport(context)
-        // Phone-hosts-hotspot (Zontes action=128 / no SoftAP pwd): dash joins the phone.
+        // Phone-hosts-hotspot (Carbit action=128 / no SoftAP pwd): dash joins the phone.
         if (qr.supportsPhoneHotspot && qr.pwd.isEmpty()) {
+            // A BLE-capable phone-hotspot QR (Rieju/Carbit action=128 carrying a bm= mac) goes through the
+            // NEW PhoneHotspotTransport (P2P group-owner + BLE B360 0x52 credential push, with a readable-
+            // creds manual fallback on BLE failure). INDEPENDENT of USE_FACTORY — that flag gates ONLY the
+            // 450NK SoftAP/P2P classic path below, which stays byte-for-byte unchanged.
+            if (isBleHotspot(qr)) {
+                if (activity == null) {
+                    // Background can't create the P2P group or show the assist — mirror joinPhoneHotspot's guard.
+                    LogBus.log("→ BLE phone-hotspot bike can't auto-connect in the background — open the app to connect")
+                    ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
+                    return
+                }
+                LogBus.log("→ [FACTORY] BLE phone-hotspot '${qr.ssid}' mac=${qr.mac} → PhoneHotspotTransport (independent of USE_FACTORY)")
+                BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO).connect()
+                return
+            }
+            // Phone-hotspot WITHOUT a BLE mac → the old manual tether assist, unchanged.
             joinPhoneHotspot(context, qr, gateOnAaSteady, activity)
             return
         }
