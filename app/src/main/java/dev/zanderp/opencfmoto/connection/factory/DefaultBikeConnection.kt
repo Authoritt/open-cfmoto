@@ -103,6 +103,13 @@ internal fun reduce(cur: ConnState, ev: ConnEvent): ConnState = when (ev) {
  *
  * @param maxAttempts consecutive-failure cap before fatal (injected so tests can force a fast fatal).
  * @param flapWindowNs / [flapMaxFailures] the F6 flap cap (injected for tests).
+ * @param onConnected Garage persistence hook (design doc §5, Task 8): invoked with the live [spec] —
+ *   carrying a refreshed [ConnectionSpec.lastEndpointHint] — every time the driver (re)reaches
+ *   [ConnState.Connected], whether a fresh connect or a link-only re-establish after a drop. A plain
+ *   callback (not a [BikeMemory][dev.zanderp.opencfmoto.BikeMemory] + [Context] pair) so this class stays
+ *   free of the outer app's persistence singleton and this behavior stays unit-testable without Android
+ *   (default no-op keeps every existing test call site compiling unchanged).
+ *   [BikeConnectionFactory.create] wires the real `memory.saveSpec(ctx, _)`.
  */
 class DefaultBikeConnection(
     private val transport: BikeTransport,
@@ -113,6 +120,7 @@ class DefaultBikeConnection(
     private val maxAttempts: Int = MAX_ATTEMPTS,
     private val flapWindowNs: Long = FLAP_WINDOW_NS,
     private val flapMaxFailures: Int = FLAP_MAX_FAILURES,
+    private val onConnected: (ConnectionSpec) -> Unit = {},
 ) : BikeConnection {
 
     private val _state = MutableStateFlow<ConnState>(ConnState.Idle)
@@ -238,6 +246,10 @@ class DefaultBikeConnection(
             _state.value = ConnState.Connecting(Phase.Handshake)
             session = establishAnyLink(ep)
             dispatch(ConnEvent.LinkEstablished(ep)) // -> Connected(ep)
+            // Garage persistence (design doc §5, Task 8): save the known-good spec on every fresh
+            // Connected, including a link-only re-establish (ep is still the live, still-good endpoint).
+            runCatching { onConnected(spec.copy(lastEndpointHint = ep.host.hostAddress)) }
+                .onFailure { io.log("BikeConnection", "onConnected callback failed: ${it.message}") }
         }
     }
 

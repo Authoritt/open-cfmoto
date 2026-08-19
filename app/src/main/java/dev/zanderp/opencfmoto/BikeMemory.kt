@@ -1,6 +1,11 @@
 package dev.zanderp.opencfmoto
 
 import android.content.Context
+import android.content.SharedPreferences
+import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
+import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.bikeIdFor
+import dev.zanderp.opencfmoto.connection.factory.fromQr
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -36,6 +41,10 @@ object BikeMemory {
 
     // Per-bike projection mode ("CFMOTO" | "ANDROID_AUTO"), chosen once at pairing.
     private const val KEY_MODE_PREFIX = "mode_"
+
+    // Per-bike ConnectionSpec JSON (design doc 2026-08-18 §5), keyed by ConnectionSpec.bikeId
+    // (QR mac, else ssid — see ConnectionSpec.bikeIdFor). Task 8.
+    private const val KEY_SPEC_PREFIX = "spec_"
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -75,6 +84,11 @@ object BikeMemory {
         }
         writeList(ctx, list)
         prefs(ctx).edit().putString(KEY_SELECTED, raw).apply()
+        // Config-ownership §2: "the mode is set at Scan, stored in the spec". Seed a fresh bike's
+        // ConnectionSpec here (the chokepoint every scan/pairing flow already calls) so the Garage fast
+        // path has data on the very next connect — never overwrite an existing spec (would erase a
+        // refined mode/lastEndpointHint/defaultMapProvider a prior connect or the Garage already saved).
+        if (specFor(ctx, qr) == null) saveSpec(ctx, ConnectionSpec.fromQr(qr))
     }
 
     fun select(ctx: Context, raw: String) {
@@ -113,8 +127,11 @@ object BikeMemory {
      * never connected this bike. Lets the connect path skip the transport that doesn't work on this
      * phone instead of burning its timeout every time (see [setWinningTransport]).
      */
-    fun winningTransport(ctx: Context, ssid: String): String? =
-        if (ssid.isBlank()) null else prefs(ctx).getString("$KEY_TRANSPORT_PREFIX$ssid", null)
+    fun winningTransport(ctx: Context, ssid: String): String? = winningTransport(prefs(ctx), ssid)
+
+    /** [SharedPreferences]-direct core of [winningTransport] — see [specFor]'s KDoc for why this seam exists. */
+    internal fun winningTransport(prefs: SharedPreferences, ssid: String): String? =
+        if (ssid.isBlank()) null else prefs.getString("$KEY_TRANSPORT_PREFIX$ssid", null)
 
     /**
      * Remember which transport just got Wi-Fi up for this bike. Some dashes advertise Wi-Fi Direct
@@ -136,6 +153,52 @@ object BikeMemory {
     fun setBikeMode(ctx: Context, ssid: String, mode: String) {
         if (ssid.isBlank()) return
         prefs(ctx).edit().putString("$KEY_MODE_PREFIX$ssid", mode).apply()
+    }
+
+    /**
+     * The persisted [ConnectionSpec] for the bike [qr] identifies (design doc 2026-08-18 §5), or null if
+     * we've never saved one — [dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory.create]'s
+     * fast path: a known spec skips re-detection (auto-vs-P2P racing, mode probing) entirely.
+     */
+    fun specFor(ctx: Context, qr: QrData): ConnectionSpec? = specFor(prefs(ctx), qr)
+
+    /**
+     * Persist [spec] under its own [ConnectionSpec.bikeId] (Task 8: called on a successful connect with
+     * a refreshed [ConnectionSpec.lastEndpointHint], and from the Garage when the rider sets a per-bike
+     * default map provider or a manual mode override).
+     *
+     * Also keeps the legacy [winningTransport] index fed for [spec.ssid] — [transport.P2pTransport] and
+     * the pre-factory [dev.zanderp.opencfmoto.connection.CfmotoConnect] path still read it directly, so a
+     * spec saved via the (currently flagged-off) factory path must not leave them blind. PHONE_HOTSPOT
+     * has no legacy AP/P2P equivalent, so it leaves the index untouched.
+     */
+    fun saveSpec(ctx: Context, spec: ConnectionSpec) = saveSpec(prefs(ctx), spec)
+
+    /**
+     * [SharedPreferences]-direct core of [specFor]/[saveSpec] (`internal`, not `private`): the seam
+     * `BikeMemoryTest` uses to exercise the real persistence logic on the JVM with a hand-rolled
+     * in-memory [SharedPreferences] fake, since this project has no Robolectric/mocking library on the
+     * unit-test classpath to fabricate a real [Context] (see `DefaultBikeConnectionTest`'s KDoc for the
+     * same constraint). The `Context`-taking overloads above are the only production entry points.
+     */
+    internal fun specFor(prefs: SharedPreferences, qr: QrData): ConnectionSpec? {
+        val id = ConnectionSpec.bikeIdFor(qr)
+        if (id.isBlank()) return null
+        val json = prefs.getString("$KEY_SPEC_PREFIX$id", null) ?: return null
+        return runCatching { ConnectionSpec.fromJson(json) }.getOrNull()
+    }
+
+    internal fun saveSpec(prefs: SharedPreferences, spec: ConnectionSpec) {
+        if (spec.bikeId.isBlank()) return
+        prefs.edit().putString("$KEY_SPEC_PREFIX${spec.bikeId}", spec.toJson()).apply()
+        val transport = when (spec.mode) {
+            TransportKind.SOFT_AP -> "AP"
+            TransportKind.P2P -> "P2P"
+            TransportKind.PHONE_HOTSPOT -> null
+        }
+        if (transport != null && !spec.ssid.isNullOrBlank()) {
+            prefs.edit().putString("$KEY_TRANSPORT_PREFIX${spec.ssid}", transport).apply()
+        }
     }
 
     // ---- convenience accessors used across the app (selected bike) ----

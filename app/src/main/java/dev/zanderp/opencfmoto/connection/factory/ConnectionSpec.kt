@@ -48,6 +48,13 @@ data class ConnectionSpec(
 }
 
 /**
+ * The stable per-bike key: the QR `mac` (`bm=`) when present, else the `ssid` (design doc §5). The single
+ * definition [fromQr] and [dev.zanderp.opencfmoto.BikeMemory.specFor]/`saveSpec` (Task 8) share, so a saved
+ * spec is always looked up under the exact id a fresh scan would derive.
+ */
+fun ConnectionSpec.Companion.bikeIdFor(qr: QrData): String = qr.mac ?: qr.ssid
+
+/**
  * Derive a [ConnectionSpec] from a scanned/parsed [QrData]. Mode selection reuses [QrData]'s own bitmask
  * getters rather than re-deriving the `action` bitmask here (spec design doc §7/§8):
  *  - [QrData.supportsPhoneHotspot] (bit7, or blank-ssid + mac) wins outright — no ssid/pwd to join.
@@ -62,7 +69,7 @@ fun ConnectionSpec.Companion.fromQr(qr: QrData): ConnectionSpec {
         else -> TransportKind.SOFT_AP
     }
     return ConnectionSpec(
-        bikeId = qr.mac ?: qr.ssid,
+        bikeId = bikeIdFor(qr),
         mode = mode,
         ssid = qr.ssid,
         pwd = qr.pwd,

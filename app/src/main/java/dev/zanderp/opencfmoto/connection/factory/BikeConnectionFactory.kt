@@ -27,19 +27,20 @@ object BikeConnectionFactory {
     }
 
     /**
-     * Build a ready-to-drive connection for [qr]. For now the spec is always derived fresh from the QR;
-     * the Garage fast-path (remembered [ConnectionSpec], skipping re-detection) is wired in Task 8.
-     *
-     * @param memory accepted now so the Task-8 fast-path is a one-line change here (no call-site churn).
+     * Build a ready-to-drive connection for [qr]. Garage fast-path (Task 8): a remembered [ConnectionSpec]
+     * for this bike skips re-detection (auto-vs-P2P racing, mode probing); a never-seen bike falls back to
+     * deriving one fresh from the QR, same as before. Either way, [DefaultBikeConnection] saves the spec
+     * back to [memory] once it reaches `Connected` (refreshing [ConnectionSpec.lastEndpointHint]), so the
+     * *next* connect always has the freshest known-good spec.
      */
     fun create(ctx: Context, qr: QrData, memory: BikeMemory, io: PlatformIO): BikeConnection {
-        // TODO(Task 8): val spec = memory.specFor(qr) ?: ConnectionSpec.fromQr(qr)  — Garage skip-detection.
-        val spec = ConnectionSpec.fromQr(qr)
+        val spec = memory.specFor(ctx, qr) ?: ConnectionSpec.fromQr(qr)
         return DefaultBikeConnection(
             transport = selectTransport(spec),
             links = listOf(EasyConnBikeLink(), YunmoBikeLink()),
             spec = spec,
             io = io,
+            onConnected = { saved -> memory.saveSpec(ctx, saved) },
         )
     }
 }

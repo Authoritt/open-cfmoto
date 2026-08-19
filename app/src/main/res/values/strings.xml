@@ -710,6 +710,10 @@
     <string name="ovk_garage_saved">saved</string>
     <string name="ovk_garage_no_mode">NO MODE</string>
     <string name="ovk_garage_mode_subtitle">Chosen once per bike. Editable here whenever you like.</string>
+    <!-- garage: per-bike default map provider (config-ownership design doc §2) -->
+    <string name="ovk_garage_no_map">NO DEFAULT</string>
+    <string name="ovk_dlg_map_title">Default map for %1$s?</string>
+    <string name="ovk_garage_map_subtitle">Seeds the Map screen for this bike. Change anytime.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Camera permission required</string>
     <string name="ovk_scan_perm_body">to scan the dash QR</string>
@@ -732,7 +736,6 @@
     <string name="ovk_autoconnect_channel_desc">Shown while the app connects to the bike on its own.</string>
     <string name="ovk_settings_group_projection">Projection</string>
     <string name="ovk_settings_default_mode">Default mode</string>
-    <string name="ovk_settings_map_provider">Map provider</string>
     <string name="ovk_settings_dash_renderer">Dash renderer</string>
     <string name="ovk_renderer_maplibre">MapLibre · vector 3D</string>
     <string name="ovk_renderer_osmdroid">osmdroid · raster</string>

@@ -720,7 +720,6 @@
     <string name="ovk_autoconnect_channel_desc">Se muestra mientras la app se conecta con la moto por su cuenta.</string>
     <string name="ovk_settings_group_projection">Proyección</string>
     <string name="ovk_settings_default_mode">Modo por defecto</string>
-    <string name="ovk_settings_map_provider">Proveedor de mapa</string>
     <string name="ovk_settings_dash_renderer">Motor del tablero</string>
     <string name="ovk_renderer_maplibre">MapLibre · vectorial 3D</string>
     <string name="ovk_renderer_osmdroid">osmdroid · ráster</string>
