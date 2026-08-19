@@ -135,6 +135,17 @@ fun DashViewScreen(nav: NavController) {
                     lineHeight = 23.sp,
                     textAlign = TextAlign.Center,
                 )
+                Spacer(Modifier.size(12.dp))
+                // Say the constraint out loud, in the order the rider has to do it: the destination
+                // reaches the dash through Android Auto, so the bike comes first and our map is not
+                // part of that path at all.
+                Text(
+                    stringResource(R.string.ovk_dash_aa_note),
+                    color = c.inkFaint,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    textAlign = TextAlign.Center,
+                )
                 Spacer(Modifier.size(18.dp))
                 // The shared reading of the connection (same rules as the dashboard gauge), so a connect
                 // already in flight reads "Conectando…" / "Reconectando 1/3" instead of inviting a retap.

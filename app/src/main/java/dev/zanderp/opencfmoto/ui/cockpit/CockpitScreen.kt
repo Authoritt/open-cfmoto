@@ -523,7 +523,11 @@ fun CockpitScreen(nav: NavController) {
             // dash, it is a different map, and the rider read it as the dash. Overtake draws its own map
             // and never uses AA, so this is hidden for the built-in provider (there, the cockpit map IS
             // what we project — WYSIWYG) and never competes with the Overtake pipeline.
-            if (provider == MapProvider.GOOGLE || provider == MapProvider.WAZE) {
+            if (handsToNavApp) {
+                // The provider is chosen right here (the chip on the destination bar), so this is where
+                // the rider learns what choosing Google/Waze actually means: the dash is not ours to
+                // paint in that mode, and the order matters — bike first, destination after.
+                ProviderNote(stringResource(R.string.ovk_provider_aa_hint))
                 DashViewButton { nav.navigate(Routes.DASH_VIEW) }
             }
             if (navState.active) NavCard(navState, Modifier.fillMaxWidth())
@@ -651,6 +655,24 @@ private fun ModeToggle(cockpit: Boolean, onChange: (Boolean) -> Unit) {
         Seg(stringResource(R.string.ovk_mode_map), !cockpit, Modifier.weight(1f)) { onChange(false) }
         Seg(stringResource(R.string.ovk_mode_panel), cockpit, Modifier.weight(1f)) { onChange(true) }
     }
+}
+
+/** One quiet line over the map — same floating-chrome frame as the controls around it, so it reads. */
+@Composable
+private fun ProviderNote(text: String) {
+    val c = LocalCockpitColors.current
+    Text(
+        text,
+        color = c.inkDim,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(c.ground.copy(alpha = 0.92f))
+            .border(1.dp, c.line, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+    )
 }
 
 @Composable
