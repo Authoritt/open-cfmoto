@@ -84,6 +84,13 @@ interface BikeLink {
 
 /** Platform seam the app supplies so this package stays free of Activity/UI/video wiring. */
 interface PlatformIO {
+    /**
+     * The application [Context]. Headless SoftAP/P2P auto-connect (design section 6) runs with
+     * [activityOrNull] == null yet still needs a Context for `ConnectivityManager` / `WifiManager` /
+     * `WifiP2pManager`, so this is the always-available seam the transports/links reach through.
+     * [activityOrNull] stays reserved for the interactive-dialog paths that genuinely need an Activity.
+     */
+    val appContext: Context
     val log: (String, String) -> Unit
     fun activityOrNull(): Activity?
     fun videoSink(): VideoSink

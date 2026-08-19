@@ -97,9 +97,9 @@ internal fun reduce(cur: ConnState, ev: ConnEvent): ConnState = when (ev) {
  * `@Volatile`, and [connect]/[disconnect] serialize on [lifecycleLock] with a cancel-then-join handoff so a
  * new run cannot start while the previous driver is still unwinding (F3).
  *
- * Constructed by [BikeConnectionFactory.create]. The transport/link wrappers are the Task-6 shells for now
- * (their `open`/`establish` throw), so the happy path is not yet live on a bike — but the state machine and
- * the reducer it drives are complete and tested here.
+ * Constructed by [BikeConnectionFactory.create]. As of Task 6 the transport/link wrappers are real
+ * (SoftAP/P2P over `BikeWifi`/`BikeWifiP2p`, EasyConn/Yunmo over `EasyConnProber`/`YunmoLink`), so the
+ * happy path is device-runnable; the state machine and the reducer it drives are complete and tested here.
  *
  * @param maxAttempts consecutive-failure cap before fatal (injected so tests can force a fast fatal).
  * @param flapWindowNs / [flapMaxFailures] the F6 flap cap (injected for tests).
@@ -297,12 +297,10 @@ class DefaultBikeConnection(
     }
 
     /**
-     * Context seam. [PlatformIO] surfaces only the (optional) Activity, so we reach the app Context through
-     * it. TODO(Task 6): headless SoftAP/P2P auto-connect (design section 6) runs with
-     * `activityOrNull() == null` and today has no Context source — add an app-Context accessor to
-     * [PlatformIO] when wiring the real transports, or thread the `create(ctx, ...)` context through here.
+     * Context seam. Headless SoftAP/P2P auto-connect (design section 6) runs with
+     * `activityOrNull() == null`, so the app Context comes from [PlatformIO.appContext] (wired in Task 6),
+     * NOT from the optional Activity. [PlatformIO.activityOrNull] stays reserved for the interactive
+     * phone-hotspot path (gated in [connect]); the transports/links only ever need this app Context.
      */
-    private fun requireContext(): Context =
-        io.activityOrNull()?.applicationContext
-            ?: throw IllegalStateException("no Context available (needs foreground)")
+    private fun requireContext(): Context = io.appContext
 }

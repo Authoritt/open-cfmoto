@@ -44,6 +44,11 @@ class DefaultBikeConnectionTest {
     }
 
     private object NoActivityIo : PlatformIO {
+        // Throwing getter (not a stored value): a plain JVM unit test has no real Context, and this
+        // preserves the exact failure these tests rely on — the first ensureConnected() throws at
+        // requireContext() -> io.appContext (was: activityOrNull()==null), i.e. before the fake
+        // transport.open() even runs — so the teardown/terminal-state assertions are unchanged.
+        override val appContext: Context get() = throw IllegalStateException("no app Context in unit test")
         override val log: (String, String) -> Unit = { _, _ -> }
         override fun activityOrNull(): Activity? = null
         override fun videoSink(): VideoSink = throw IllegalStateException("no video sink in unit test")
