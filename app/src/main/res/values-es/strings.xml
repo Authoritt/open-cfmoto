@@ -1077,4 +1077,8 @@
     <string name="ovk_map_theme_day">Día</string>
     <string name="ovk_map_theme_night">Noche</string>
     <string name="ovk_dash_view">Ver tablero (Android Auto)</string>
+    <!-- ver tablero (Android Auto): el vídeo REAL del tablero en el teléfono — nunca un sustituto -->
+    <string name="ovk_dash_live">Tablero en vivo</string>
+    <string name="ovk_dash_no_video">Aún no hay imagen del tablero. Conecta la moto — con Google/Waze el tablero lo pinta Android Auto.</string>
+    <string name="ovk_dash_connect_first">Conecta la moto primero</string>
 </resources>

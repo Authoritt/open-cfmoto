@@ -72,7 +72,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.NavLauncher
-import dev.zanderp.opencfmoto.HudViewActivity
 import dev.zanderp.opencfmoto.settings.MapProvider
 import dev.zanderp.opencfmoto.settings.SettingsStore
 import kotlinx.coroutines.launch
@@ -510,11 +509,15 @@ fun CockpitScreen(nav: NavController) {
                 }
             }
             ModeToggle(cockpitMode) { cockpitMode = it }
-            // AA mode only: a "Dash view" button opens the live Android Auto HUD (Google Maps / Waze as
-            // projected to the dash) mirrored on the phone. Overtake draws its own map and never uses AA,
-            // so this is hidden for the built-in provider and never competes with the Overtake pipeline.
+            // AA mode only: "Dash view" opens the LIVE Android Auto video (Google Maps / Waze exactly as
+            // Android Auto is painting them on the bike dash) — the cockpit's own Compose screen, which
+            // shows that video or nothing at all. It used to open the classic HudViewActivity, whose
+            // no-video fallback paints OUR map instead: with Google/Waze that map is not a preview of the
+            // dash, it is a different map, and the rider read it as the dash. Overtake draws its own map
+            // and never uses AA, so this is hidden for the built-in provider (there, the cockpit map IS
+            // what we project — WYSIWYG) and never competes with the Overtake pipeline.
             if (provider == MapProvider.GOOGLE || provider == MapProvider.WAZE) {
-                DashViewButton { runCatching { HudViewActivity.start(ctx) } }
+                DashViewButton { nav.navigate(Routes.DASH_VIEW) }
             }
             if (navState.active) NavCard(navState, Modifier.fillMaxWidth())
         }

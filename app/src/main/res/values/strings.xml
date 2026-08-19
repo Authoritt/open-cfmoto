@@ -1097,4 +1097,8 @@
     <string name="ovk_map_theme_day">Day</string>
     <string name="ovk_map_theme_night">Night</string>
     <string name="ovk_dash_view">Dash view (Android Auto)</string>
+    <!-- dash view (Android Auto): the REAL dash video on the phone — never a stand-in map -->
+    <string name="ovk_dash_live">Dash live</string>
+    <string name="ovk_dash_no_video">No dash image yet. Connect the bike — with Google/Waze the bike dash is painted by Android Auto.</string>
+    <string name="ovk_dash_connect_first">Connect to the bike first</string>
 </resources>
