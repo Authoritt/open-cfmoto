@@ -3,7 +3,6 @@ package dev.zanderp.opencfmoto
 import android.content.Context
 import android.content.SharedPreferences
 import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
-import dev.zanderp.opencfmoto.connection.factory.TransportKind
 import dev.zanderp.opencfmoto.connection.factory.bikeIdFor
 import dev.zanderp.opencfmoto.connection.factory.fromQr
 import org.json.JSONArray
@@ -138,9 +137,13 @@ object BikeMemory {
      * (DIRECT-* SSID) yet never form a P2P group on a given phone; the app then falls back to the
      * SoftAP after a long timeout. Recording the winner makes every later connect go straight to it.
      */
-    fun setWinningTransport(ctx: Context, ssid: String, transport: String) {
+    fun setWinningTransport(ctx: Context, ssid: String, transport: String) =
+        setWinningTransport(prefs(ctx), ssid, transport)
+
+    /** [SharedPreferences]-direct core of [setWinningTransport] (test seam; see [specFor]'s KDoc). */
+    internal fun setWinningTransport(prefs: SharedPreferences, ssid: String, transport: String) {
         if (ssid.isBlank()) return
-        prefs(ctx).edit().putString("$KEY_TRANSPORT_PREFIX$ssid", transport).apply()
+        prefs.edit().putString("$KEY_TRANSPORT_PREFIX$ssid", transport).apply()
     }
 
     /**
@@ -167,10 +170,13 @@ object BikeMemory {
      * a refreshed [ConnectionSpec.lastEndpointHint], and from the Garage when the rider sets a per-bike
      * default map provider or a manual mode override).
      *
-     * Also keeps the legacy [winningTransport] index fed for [spec.ssid] — [transport.P2pTransport] and
-     * the pre-factory [dev.zanderp.opencfmoto.connection.CfmotoConnect] path still read it directly, so a
-     * spec saved via the (currently flagged-off) factory path must not leave them blind. PHONE_HOTSPOT
-     * has no legacy AP/P2P equivalent, so it leaves the index untouched.
+     * Persisting a spec NEVER touches the legacy [winningTransport] index. [spec.mode] is frequently just a
+     * `fromQr` GUESS (the seed caller [save] and the Garage map-picker both pass a QR-derived spec), whereas
+     * the transport-winner is a real connection OUTCOME the live path records itself via [setWinningTransport]
+     * (CfmotoConnect). Mirroring the guess here silently rewrote a learned winner — e.g. a DIRECT-* bike whose
+     * P2P never forms learns "AP", then a Garage map-pick flipped it back to "P2P", forcing the next
+     * auto-connect to try P2P at the full timeout. The factory's success hook records the real winner
+     * explicitly instead (BikeConnectionFactory.onConnected → [setWinningTransport]).
      */
     fun saveSpec(ctx: Context, spec: ConnectionSpec) = saveSpec(prefs(ctx), spec)
 
@@ -190,15 +196,9 @@ object BikeMemory {
 
     internal fun saveSpec(prefs: SharedPreferences, spec: ConnectionSpec) {
         if (spec.bikeId.isBlank()) return
+        // ONLY the spec — never the winningTransport index (see the public overload's KDoc). spec.mode is
+        // frequently a fromQr guess; mirroring it here silently clobbered a real learned winner.
         prefs.edit().putString("$KEY_SPEC_PREFIX${spec.bikeId}", spec.toJson()).apply()
-        val transport = when (spec.mode) {
-            TransportKind.SOFT_AP -> "AP"
-            TransportKind.P2P -> "P2P"
-            TransportKind.PHONE_HOTSPOT -> null
-        }
-        if (transport != null && !spec.ssid.isNullOrBlank()) {
-            prefs.edit().putString("$KEY_TRANSPORT_PREFIX${spec.ssid}", transport).apply()
-        }
     }
 
     // ---- convenience accessors used across the app (selected bike) ----

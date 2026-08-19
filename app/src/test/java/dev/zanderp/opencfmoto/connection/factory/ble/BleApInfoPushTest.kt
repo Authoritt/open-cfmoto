@@ -67,4 +67,15 @@ class BleApInfoPushTest {
         assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5), r.frames[0].payload)
         assertEquals(0, r.remainder.size)
     }
+
+    @Test fun `a checksum-failing frame is reported in dropped, not emitted, and does not block a good frame`() {
+        val bad = EcBtpProtocol.build(EcBtpProtocol.CMD_NOTIFY_CAR_NET_INFO.toByte(), ByteArray(0))
+        bad[bad.size - 2] = (bad[bad.size - 2] + 1).toByte() // corrupt the xor byte → parse() rejects it
+        val r = BleApInfoPush.extractFrames(empty, bad + frame51)
+        assertEquals("only the good frame parses", 1, r.frames.size)
+        assertEquals(0x51.toByte(), r.frames[0].command)
+        assertEquals("the corrupted frame is surfaced for the owner's log", 1, r.dropped.size)
+        assertArrayEquals(bad, r.dropped[0])
+        assertEquals(0, r.remainder.size)
+    }
 }

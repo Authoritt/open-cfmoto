@@ -40,7 +40,16 @@ object BikeConnectionFactory {
             links = listOf(EasyConnBikeLink(), YunmoBikeLink()),
             spec = spec,
             io = io,
-            onConnected = { saved -> memory.saveSpec(ctx, saved) },
+            onConnected = { saved ->
+                memory.saveSpec(ctx, saved)
+                // Record the REAL transport outcome (saveSpec no longer mirrors spec.mode — that was a
+                // fromQr guess). PHONE_HOTSPOT has no legacy AP/P2P winner index, so skip it.
+                when (saved.mode) {
+                    TransportKind.SOFT_AP -> memory.setWinningTransport(ctx, saved.ssid.orEmpty(), "AP")
+                    TransportKind.P2P -> memory.setWinningTransport(ctx, saved.ssid.orEmpty(), "P2P")
+                    TransportKind.PHONE_HOTSPOT -> {}
+                }
+            },
         )
     }
 }

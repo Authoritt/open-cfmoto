@@ -23,6 +23,16 @@ class ConnectionSpecTest {
     @Test fun `action bit0 maps to SOFT_AP`() =
         assertEquals(TransportKind.SOFT_AP, ConnectionSpec.fromQr(qr(action = 1, ssid = "CFMOTO")).mode)
 
+    @Test fun `bit7 QR carrying a SoftAP password maps to SOFT_AP (matches classic pwd-empty gate)`() {
+        // A bit7 dash that ALSO advertises a password is a SoftAP bike classically (CfmotoConnect gates
+        // phone-hotspot on supportsPhoneHotspot && pwd.isEmpty()); the persisted spec must agree, not diverge.
+        val withCreds = QrData(
+            ssid = "CFMOTO-9", pwd = "secret", auth = null, mac = "DD:0D:30:16:6B:50", name = null,
+            action = 128, modelId = null, sn = null, channel = null,
+        )
+        assertEquals(TransportKind.SOFT_AP, ConnectionSpec.fromQr(withCreds).mode)
+    }
+
     @Test fun `json round-trips`() {
         val s = ConnectionSpec.fromQr(qr(action = 128))
         assertEquals(s, ConnectionSpec.fromJson(s.toJson()))

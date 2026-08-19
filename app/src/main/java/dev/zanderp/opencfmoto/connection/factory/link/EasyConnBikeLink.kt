@@ -48,6 +48,9 @@ class EasyConnBikeLink(
         io: PlatformIO,
     ): LinkSession {
         val logCb: (String) -> Unit = { msg -> io.log(TAG, msg) }
+        // NOTE: useServerMode is computed + logged ONLY — it does not reach EasyConnProber.start (single
+        // signature, no server-mode param). The prober is structurally phone-as-server already; the real
+        // server-mode completion is owner-test-gated (design §11). Don't mistake this for wired behavior.
         val useServerMode = serverMode || endpoint.phoneIsServer // true only on the phone-hotspot path (design §11)
         val prober = this.prober ?: EasyConnProber(ctx.applicationContext, logCb).also { this.prober = it }
 

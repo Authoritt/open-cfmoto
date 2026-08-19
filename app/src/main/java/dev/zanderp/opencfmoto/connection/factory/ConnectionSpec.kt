@@ -57,14 +57,16 @@ fun ConnectionSpec.Companion.bikeIdFor(qr: QrData): String = qr.mac ?: qr.ssid
 /**
  * Derive a [ConnectionSpec] from a scanned/parsed [QrData]. Mode selection reuses [QrData]'s own bitmask
  * getters rather than re-deriving the `action` bitmask here (spec design doc §7/§8):
- *  - [QrData.supportsPhoneHotspot] (bit7, or blank-ssid + mac) wins outright — no ssid/pwd to join.
+ *  - [QrData.supportsPhoneHotspot] (bit7, or blank-ssid + mac) **with no SoftAP password** — matches the
+ *    classic router's `supportsPhoneHotspot && pwd.isEmpty()` gate (CfmotoConnect): a bit7 QR that also
+ *    carries a password is a SoftAP bike, not phone-hosts-hotspot, so it falls through to the cases below.
  *  - else [QrData.supportsP2p] (bit3) only counts for a genuine Wi-Fi Direct QR (`ssid` starts with
  *    "DIRECT") — some bikes set bit3 alongside a normal AP ssid, which must still resolve to SoftAP.
  *  - else SoftAp (the common case: bit0/bit1).
  */
 fun ConnectionSpec.Companion.fromQr(qr: QrData): ConnectionSpec {
     val mode = when {
-        qr.supportsPhoneHotspot -> TransportKind.PHONE_HOTSPOT
+        qr.supportsPhoneHotspot && qr.pwd.isEmpty() -> TransportKind.PHONE_HOTSPOT
         qr.supportsP2p && qr.ssid.startsWith("DIRECT") -> TransportKind.P2P
         else -> TransportKind.SOFT_AP
     }

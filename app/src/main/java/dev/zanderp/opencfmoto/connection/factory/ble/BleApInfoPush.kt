@@ -252,9 +252,11 @@ class BleApInfoPush(
 
     /** Accumulate BLE chunks and dispatch complete EcBtp frames; a `0x51`/`0x53` reply ends the handshake. */
     private fun handleNotification(data: ByteArray) {
+        log("[BLE-AP] <- raw ${hex(data)}") // the owner's ONLY receive-path signal — keep the raw bytes
         val batch = extractFrames(notifyAcc, data)
         notifyAcc = batch.remainder
-        log("[BLE-AP] <- chunk(${data.size}) frames=${batch.frames.size} buffered=${notifyAcc.size}B")
+        for (region in batch.dropped) log("[BLE-AP] <- dropped malformed ${hex(region)}")
+        log("[BLE-AP] <- chunk(${data.size}) frames=${batch.frames.size} dropped=${batch.dropped.size} buffered=${notifyAcc.size}B")
         for (f in batch.frames) onEcBtpFrame(f.command)
     }
 
@@ -279,20 +281,29 @@ class BleApInfoPush(
         /** EcBtp frame overhead: `START | cmd | len | … | xor | END` = 5 bytes around the payload. */
         private const val FRAME_OVERHEAD = 5
 
-        /** Result of [extractFrames]: complete EcBtp [frames] pulled out, plus the still-incomplete [remainder]. */
-        internal class FrameBatch(val remainder: ByteArray, val frames: List<EcBtpProtocol.Frame>)
+        /**
+         * Result of [extractFrames]: complete EcBtp [frames] pulled out, the still-incomplete [remainder]
+         * kept for the next chunk, and any [dropped] byte-regions that framed like a frame but failed
+         * [EcBtpProtocol.parse] (bad checksum / framing) — RETURNED, not logged, so the caller owns the hex.
+         */
+        internal class FrameBatch(
+            val remainder: ByteArray,
+            val frames: List<EcBtpProtocol.Frame>,
+            val dropped: List<ByteArray>,
+        )
 
         /**
-         * PURE (no GATT/Android) EcBtp reassembler for BLE notifications, split out so the receive path — the
-         * only device-INDEPENDENT parse in this class — is unit-testable without a bike. Appends [incoming] to
-         * [acc], then pulls every complete frame: sync to `START 0x24`, read the declared length at index 2
-         * (`total = declared + 1`), validate via [EcBtpProtocol.parse]. Leftovers (a partial frame, or bytes
-         * with no START yet) stay in [FrameBatch.remainder] for the next chunk; a bad length byte skips one
-         * byte and resyncs; a checksum-failing frame is dropped (its region consumed).
+         * PURE (no GATT/Android, no logging) EcBtp reassembler for BLE notifications, split out so the receive
+         * path — the only device-INDEPENDENT parse in this class — is unit-testable without a bike. Appends
+         * [incoming] to [acc], then pulls every complete frame: sync to `START 0x24`, read the declared length
+         * at index 2 (`total = declared + 1`), validate via [EcBtpProtocol.parse]. Leftovers (a partial frame,
+         * or bytes with no START yet) stay in [FrameBatch.remainder] for the next chunk; a bad length byte
+         * skips one byte and resyncs; a well-framed frame that fails parse goes to [FrameBatch.dropped].
          */
         internal fun extractFrames(acc: ByteArray, incoming: ByteArray): FrameBatch {
             var buf = acc + incoming
             val frames = ArrayList<EcBtpProtocol.Frame>()
+            val dropped = ArrayList<ByteArray>()
             while (true) {
                 val start = buf.indexOf(EcBtpProtocol.START)
                 if (start < 0) { buf = ByteArray(0); break }         // no START anywhere: nothing parseable
@@ -304,9 +315,10 @@ class BleApInfoPush(
                 if (buf.size < total) break                          // wait for the rest of the frame
                 val frameBytes = buf.copyOfRange(0, total)
                 buf = buf.copyOfRange(total, buf.size)
-                EcBtpProtocol.parse(frameBytes)?.let { frames.add(it) } // checksum fail → drop, region consumed
+                val parsed = EcBtpProtocol.parse(frameBytes)
+                if (parsed != null) frames.add(parsed) else dropped.add(frameBytes) // checksum/framing fail
             }
-            return FrameBatch(buf, frames)
+            return FrameBatch(buf, frames, dropped)
         }
     }
 }

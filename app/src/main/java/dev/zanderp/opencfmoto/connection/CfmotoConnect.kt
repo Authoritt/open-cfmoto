@@ -71,10 +71,21 @@ object CfmotoConnect {
     /**
      * Route SoftAP/P2P connects through [BikeConnectionFactory] (design doc 2026-08-18) instead of the
      * proven [joinWifiP2p] / [BikeWifi.reuseOrJoin] + [proberFor] path below. KEEP FALSE: the factory has
-     * not been verified against a live bike yet (Task 7 only proves it builds/installs/launches clean),
-     * and even once flipped it does not yet honor [joinWifi]'s `gateOnAaSteady` hand-off (Android-Auto-
-     * gated connects still need the old path) or the phone-hotspot transport (Task 9). Flip only after an
-     * owner-in-the-loop SoftAP + P2P regression pass on the bike; instant rollback is flipping this back.
+     * not been verified against a live bike yet (Task 7 only proves it builds/installs/launches clean).
+     * Flip only after an owner-in-the-loop SoftAP + P2P regression pass on the bike; instant rollback is
+     * flipping this back.
+     *
+     * Before flipping true (the call site below is fire-and-forget — `.create(...).connect()`, instance
+     * discarded — so several lifecycle guarantees are NOT yet met):
+     *  (i)   Retain the [BikeConnection] handle and route teardown / mode-switch through its `disconnect()`.
+     *        As written, with the flag ON `disconnect()` is unreachable, the driver parks at
+     *        `events.receive()` forever, and a fresh per-instance scope leaks on every connect.
+     *  (ii)  Wire drop-watchdogs to feed `DefaultBikeConnection.signalLinkDropped`/`signalTransportLost`
+     *        (Task-6 deferral) — without them nothing drives reconnect after a mid-ride drop.
+     *  (iii) fromQr phone-hotspot gate reconciled with this router's `supportsPhoneHotspot && pwd.isEmpty()`
+     *        ✓ (ConnectionSpec.fromQr).
+     *  (iv)  Honor [joinWifi]'s `gateOnAaSteady` hand-off (Android-Auto-gated connects still need the old
+     *        path) and the phone-hotspot transport (Task 9).
      */
     private const val USE_FACTORY = false
 

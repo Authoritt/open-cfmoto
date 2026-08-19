@@ -74,33 +74,40 @@ class BikeMemoryTest {
         assertNull(BikeMemory.specFor(prefs, qr(action = 1, ssid = "", mac = null)))
     }
 
-    @Test fun `saveSpec mirrors SOFT_AP into the legacy winningTransport index`() {
+    // Persisting a spec must NEVER write the transport-winner index: spec.mode is a fromQr guess, whereas
+    // winningTransport is a real connection outcome the live path records itself (regression: the old
+    // saveSpec mirror silently rewrote a learned winner via a seed/map-pick — flag-OFF live-path bug).
+    @Test fun `saveSpec does NOT write the legacy winningTransport index (SOFT_AP)`() {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 1, ssid = "CFMOTO-1234")
 
         BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(q))
 
-        assertEquals("AP", BikeMemory.winningTransport(prefs, "CFMOTO-1234"))
+        assertNull(BikeMemory.winningTransport(prefs, "CFMOTO-1234"))
+        assertEquals(0, prefs.transportKeyCount())
     }
 
-    @Test fun `saveSpec mirrors P2P into the legacy winningTransport index`() {
+    @Test fun `saveSpec does NOT write the legacy winningTransport index (P2P)`() {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 8, ssid = "DIRECT-ab")
 
         BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(q))
 
-        assertEquals("P2P", BikeMemory.winningTransport(prefs, "DIRECT-ab"))
+        assertNull(BikeMemory.winningTransport(prefs, "DIRECT-ab"))
+        assertEquals(0, prefs.transportKeyCount())
     }
 
-    @Test fun `saveSpec leaves winningTransport untouched for PHONE_HOTSPOT (no legacy equivalent)`() {
+    @Test fun `saveSpec leaves a previously-learned winningTransport intact (no seed-or-map-pick clobber)`() {
         val prefs = FakeSharedPreferences()
-        val q = qr(action = 128, ssid = "")
+        // A DIRECT-* bike whose P2P never forms: the live path learned the REAL winner = AP.
+        BikeMemory.setWinningTransport(prefs, "DIRECT-ab", "AP")
 
-        BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(q))
+        // A later Garage map-pick / re-scan persists a fromQr-guessed P2P spec for the same bike.
+        BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(qr(action = 8, ssid = "DIRECT-ab")))
 
-        // PHONE_HOTSPOT specs carry a blank ssid (design doc §8), so there is no ssid to key by anyway;
-        // this asserts the index stays empty rather than picking up a bogus "" key.
-        assertEquals(0, prefs.transportKeyCount())
+        // The learned winner must survive — the old mirror silently rewrote "AP" → "P2P", forcing the next
+        // auto-connect to try P2P at the full timeout.
+        assertEquals("AP", BikeMemory.winningTransport(prefs, "DIRECT-ab"))
     }
 }
 
