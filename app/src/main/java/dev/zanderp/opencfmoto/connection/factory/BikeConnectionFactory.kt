@@ -141,6 +141,10 @@ object BikeConnectionFactory {
                 R.string.ovk_conn_failed_rescan,
                 ctx.getString(connectorNameRes(spec.mode)),
             ),
+            // …and for the other terminal case (a link that WAS alive and could not be recovered), which the
+            // rider reads ON THE BIKE. No connector name here on purpose: the connector is not the suspect —
+            // the network is — so naming it would only add noise to "tap Connect to try again".
+            lostLinkReason = ctx.getString(R.string.ovk_conn_lost_retry),
             onConnected = { saved ->
                 memory.saveSpec(ctx, saved)
                 // Record the REAL transport outcome (saveSpec no longer mirrors spec.mode — that was a

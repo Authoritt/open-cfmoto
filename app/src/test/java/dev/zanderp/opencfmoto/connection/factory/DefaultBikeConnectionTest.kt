@@ -110,6 +110,15 @@ class DefaultBikeConnectionTest {
         override fun stop() {}
     }
 
+    /** [ContextIo] + a log recorder: the technical give-up detail must survive in the LOG, not in the state. */
+    private class RecordingIo : PlatformIO {
+        val lines = java.util.concurrent.CopyOnWriteArrayList<String>()
+        override val appContext: Context = ContextWrapper(null) // inert token; no methods are ever called
+        override val log: (String, String) -> Unit = { _, msg -> lines += msg }
+        override fun activityOrNull(): Activity? = null
+        override fun videoSink(): VideoSink = throw IllegalStateException("no video sink in unit test")
+    }
+
     private object ContextIo : PlatformIO {
         override val appContext: Context = ContextWrapper(null) // inert token; no methods are ever called on it
         override val log: (String, String) -> Unit = { _, _ -> }
@@ -119,8 +128,9 @@ class DefaultBikeConnectionTest {
 
     private fun softApSpec() = ConnectionSpec(bikeId = "test-bike", mode = TransportKind.SOFT_AP)
 
-    /** Stand-in for the localized `ovk_conn_failed_rescan` text `BikeConnectionFactory` injects. */
+    /** Stand-ins for the localized texts `BikeConnectionFactory` injects (`ovk_conn_*`). */
     private val RESCAN = "Couldn't connect with CFMoto Wi-Fi. Scan the bike's QR again to update the garage."
+    private val LOST = "Lost the connection to the bike. Tap Connect to try again."
 
     private fun softApEndpoint() = BikeEndpoint(
         network = null,
@@ -226,12 +236,14 @@ class DefaultBikeConnectionTest {
             val transport = OpeningTransport(softApEndpoint())
             val link = FlakyLink(successes = 1) // connects once, then every re-establish fails
             val counters = java.util.concurrent.CopyOnWriteArrayList<Int>()
+            val recording = RecordingIo()
             val conn = DefaultBikeConnection(
                 transport = transport,
                 links = listOf(link),
                 spec = softApSpec(),
-                io = ContextIo,
+                io = recording,
                 initialFailureReason = RESCAN,
+                lostLinkReason = LOST,
             )
             val watcher = launch { conn.state.collect { if (it is ConnState.Retrying) counters += it.attempt } }
 
@@ -246,9 +258,14 @@ class DefaultBikeConnectionTest {
             assertEquals("1 initial establish + exactly 3 reconnect attempts", 4, link.attempts)
             assertEquals("the rider sees 1/3, 2/3, 3/3", listOf(1, 2, 3), counters.distinct())
             assertEquals("the SAME connector throughout — a retry never re-opens another transport", 1, transport.opened)
+            // Rider-facing, and NOT the "your connector is wrong" text — the two classes must never be
+            // confused: here the Garage entry is fine, the network went away.
+            assertEquals(LOST, terminal.reason)
+            assertTrue("the give-up text must not be the wrong-connector one", terminal.reason != RESCAN)
+            // …and the technical account is still available to support, in the log.
             assertTrue(
-                "the terminal reason must say the link was lost, not that the connector is wrong: ${terminal.reason}",
-                terminal.reason.contains("3") && terminal.reason != RESCAN,
+                "the attempt count must survive in the log: ${recording.lines}",
+                recording.lines.any { it.startsWith("giving up:") && it.contains("3") },
             )
         }
     }

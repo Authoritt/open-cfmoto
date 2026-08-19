@@ -734,6 +734,8 @@
     <string name="ovk_conn_failed_rescan">No se pudo conectar con %1$s. Escanea el QR de la moto otra vez para actualizar el garaje.</string>
     <!-- reintento acotado y visible sobre el MISMO conector (caída de red, no conector equivocado) -->
     <string name="ovk_conn_reconnecting_n">Reconectando %1$d/%2$d</string>
+    <!-- se agotaron los reintentos de un enlace que SÍ estuvo vivo (caída de red): qué hacer ahora -->
+    <string name="ovk_conn_lost_retry">Se perdió la conexión con la moto. Toca Conectar para reintentar.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Permiso de cámara necesario</string>
     <string name="ovk_scan_perm_body">para escanear el QR del tablero</string>

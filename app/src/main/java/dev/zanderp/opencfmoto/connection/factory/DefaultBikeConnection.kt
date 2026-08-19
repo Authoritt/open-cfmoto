@@ -143,6 +143,10 @@ private fun retryOrFail(reason: String, recover: Boolean): ConnState =
  * @param initialFailureReason rider-facing text for the INITIAL-connect-failure class ("…scan the QR again
  *   to update the garage") — localized by [BikeConnectionFactory.create], which is the only place with a
  *   Context, so this class stays free of Android resources. Null keeps the technical reason (tests).
+ * @param lostLinkReason rider-facing text for the OTHER terminal case: a link that WAS alive and could not be
+ *   recovered ("…toca Conectar para reintentar"). Same injection, same reason — this one is read ON THE BIKE,
+ *   mid-ride, so it must never be an internal English string. The technical detail (attempt count / flap
+ *   window) still goes to the log. Null keeps the technical reason (tests).
  */
 class DefaultBikeConnection(
     private val transport: BikeTransport,
@@ -155,6 +159,7 @@ class DefaultBikeConnection(
     private val flapMaxFailures: Int = FLAP_MAX_FAILURES,
     private val onConnected: (ConnectionSpec) -> Unit = {},
     private val initialFailureReason: String? = null,
+    private val lostLinkReason: String? = null,
 ) : BikeConnection {
 
     private val _state = MutableStateFlow<ConnState>(ConnState.Idle)
@@ -329,10 +334,13 @@ class DefaultBikeConnection(
                 val exhausted = attempt > maxReconnectAttempts // the SAME connector, tried its allowance
                 val unstable = windowFailures >= flapMaxFailures // connects but flaps (F6)
                 if (exhausted || unstable) {
+                    // The technical account stays in the LOG (support reads it); the STATE carries the
+                    // rider-facing text, because this one is read on the bike, mid-ride.
                     val why =
                         if (unstable) "connection unstable ($windowFailures drops within ${flapWindowNs / 1_000_000_000}s)"
                         else "lost the bike link — $maxReconnectAttempts reconnect attempts failed"
-                    fatal = ConnState.Error(why, recoverable = false)
+                    io.log("BikeConnection", "giving up: $why")
+                    fatal = ConnState.Error(lostLinkReason ?: why, recoverable = false)
                     return // -> finally: teardown + publish Error
                 }
 

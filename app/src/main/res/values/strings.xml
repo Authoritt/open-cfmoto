@@ -752,6 +752,8 @@
     <string name="ovk_conn_failed_rescan">Couldn\'t connect with %1$s. Scan the bike\'s QR again to update the garage.</string>
     <!-- bounded, rider-visible reconnect on the SAME connector (a network drop, not a wrong connector) -->
     <string name="ovk_conn_reconnecting_n">Reconnecting %1$d/%2$d</string>
+    <!-- gave up reconnecting a link that WAS alive (network drop): rider-facing, says what to do next -->
+    <string name="ovk_conn_lost_retry">Lost the connection to the bike. Tap Connect to try again.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Camera permission required</string>
     <string name="ovk_scan_perm_body">to scan the dash QR</string>
