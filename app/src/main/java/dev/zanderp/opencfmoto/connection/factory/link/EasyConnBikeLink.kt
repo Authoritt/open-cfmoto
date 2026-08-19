@@ -27,9 +27,12 @@ import dev.zanderp.opencfmoto.connection.factory.TransportKind
  * failure surfaces later through the prober's own reconnect/`ConnectionState.ERROR`, consistent with the
  * Task-6 "device-verified wrap" model (the factory's transport/link watchdogs are wired in a later task).
  *
- * @param serverMode phone-as-server seam for the Task-9 PhoneHotspot path (design §11: `EasyConnProber` must
- *   accept the phone-as-server role — not yet, so this is currently a forward-looking flag). The effective
- *   value ORs in [BikeEndpoint.phoneIsServer]; SoftAP/P2P are always false → unchanged behavior.
+ * @param serverMode phone-as-server seam for the Task-9 PhoneHotspot path (design §11). The effective value
+ *   ORs in [BikeEndpoint.phoneIsServer], which is true only for `PhoneHotspotTransport`; SoftAP/P2P stay
+ *   false → unchanged behavior. The prober is already structurally phone-as-server — it opens the
+ *   :10920-10922 listeners and the bike dials back (EasyConnProber.kt:25) — so the phone-hotspot path feeds
+ *   it the group-owner bind IP (192.168.49.1) so those listeners bind to the P2P interface. The remaining
+ *   owner-test gap is whether the Rieju dash auto-dials the listeners after joining (design §8/§11).
  */
 class EasyConnBikeLink(
     private val serverMode: Boolean = false,
@@ -45,18 +48,23 @@ class EasyConnBikeLink(
         io: PlatformIO,
     ): LinkSession {
         val logCb: (String) -> Unit = { msg -> io.log(TAG, msg) }
-        val useServerMode = serverMode || endpoint.phoneIsServer // false for SoftAP/P2P (design §11)
+        val useServerMode = serverMode || endpoint.phoneIsServer // true only on the phone-hotspot path (design §11)
         val prober = this.prober ?: EasyConnProber(ctx.applicationContext, logCb).also { this.prober = it }
 
         when (endpoint.kind) {
-            // P2P: no bindable Network — hand the prober the GO gateway + our bind IP (CfmotoConnect.kt:431).
-            TransportKind.P2P -> prober.start(
+            // P2P and PhoneHotspot: no bindable Network — hand the prober our bind IP + the peer/host address
+            // so it opens its :10920-10922 servers on the right interface (CfmotoConnect.kt:431). On the
+            // phone-hotspot path the phone is the group owner, so bindIp == host == 192.168.49.1: the prober
+            // (already phone-as-server — it listens and the bike dials back, EasyConnProber.kt:25) binds its
+            // servers to our GO address. Whether the Rieju dash then auto-dials those listeners or needs an
+            // active probe to its DHCP-assigned IP is the owner-test gap (design §11, §8 step 4).
+            TransportKind.P2P, TransportKind.PHONE_HOTSPOT -> prober.start(
                 network = null,
                 gatewayOverride = endpoint.host,
                 bindIpOverride = endpoint.bindIp,
             )
-            // SoftAP (and, once server mode lands, PhoneHotspot): pass the bound Network; the prober
-            // resolves the gateway itself, exactly as CfmotoConnect.joinWifi does (CfmotoConnect.kt:256).
+            // SoftAP: pass the bound Network; the prober resolves the gateway itself, exactly as
+            // CfmotoConnect.joinWifi does (CfmotoConnect.kt:256).
             else -> prober.start(endpoint.network)
         }
         io.log(TAG, "EasyConn PXC prober started (kind=${endpoint.kind}, serverMode=$useServerMode)")

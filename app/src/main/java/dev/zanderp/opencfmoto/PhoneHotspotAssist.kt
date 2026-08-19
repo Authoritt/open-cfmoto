@@ -124,6 +124,29 @@ object PhoneHotspotAssist {
             .show()
     }
 
+    /**
+     * Improved manual fallback for the Rieju phone-hotspot path (design doc §8 step 5): when the BLE AP-info
+     * push (EcBtp `0x52`) can't complete, the phone is *already* the Wi-Fi Direct group owner, so its
+     * `networkName`/`passphrase` are **readable** — show them for the rider to enter on the dash (with the
+     * 2.4 GHz note), rather than the old "type the dash's creds" guessing. Best-effort, marshalled to the UI
+     * thread ([Activity.runOnUiThread]) since the transport opens on a background dispatcher.
+     */
+    fun showReadableHotspotGuidance(activity: Activity, ssid: String, pwd: String, goAddress: String) {
+        LogBus.log(
+            "[HOTSPOT] BLE push unavailable — phone hosts readable creds: ssid='$ssid' pwdLen=${pwd.length} " +
+                "phoneIp=$goAddress. Enter these on the dash; if the dash can't see the network, it may be 2.4 GHz-only.",
+        )
+        activity.runOnUiThread {
+            runCatching {
+                MaterialAlertDialogBuilder(activity)
+                    .setTitle(R.string.main_phone_hotspot_readable_title)
+                    .setMessage(activity.getString(R.string.main_phone_hotspot_readable_message, ssid, pwd, goAddress))
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show()
+            }
+        }
+    }
+
     private fun persistFromFields(ctx: Context, ssidField: EditText, pwdField: EditText) {
         val ssid = ssidField.text?.toString().orEmpty().trim()
         val pwd = pwdField.text?.toString().orEmpty()

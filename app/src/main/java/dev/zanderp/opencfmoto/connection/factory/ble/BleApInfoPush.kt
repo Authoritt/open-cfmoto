@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Alexandru <https://alexandru.rocks> and the OpenCfMoto contributors.
+// Part of OpenCfMoto. Free software under the GNU AGPL v3 or later; see LICENSE and NOTICE.
+package dev.zanderp.opencfmoto.connection.factory.ble
+
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.content.Context
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import dev.zanderp.opencfmoto.EcBtpProtocol
+import java.util.UUID
+
+/**
+ * Hands the phone-hosted Wi-Fi credentials to a Carbit `action=128` dash (Rieju Aventure 500) over BLE,
+ * so the dash can join the phone's Wi-Fi Direct group without the rider typing anything. Reverse-engineered
+ * from `net.easyconn.carman.wws` v6.4.0 (design doc `2026-08-18-bike-connection-factory-design.md`,
+ * Appendix A — bytecode-proven).
+ *
+ * Reuses [dev.zanderp.opencfmoto.BleWakeUp]'s GATT scaffolding pattern (connect → `requestMtu(185)` →
+ * discoverServices → `setCharacteristicNotification` + CCCD `2902`) but is deliberately a **separate class**:
+ * the CFMOTO wake-up speaks a different wire protocol (BleProtocol `AB CD` framing + AES challenge) on a
+ * different service (`B354`), so entangling the two would only add risk to a proven path. This class instead
+ * speaks the **EcBtp** framing (`0x24 | cmd | len | payload | xor | 0x0A`, see [EcBtpProtocol]) on the
+ * B36x service, and differs from the wake-up in three ways:
+ *  1. **Connect by MAC** (`spec.bleMac`, the QR `bm=`) — no scan; the official app knows the MAC from the QR.
+ *  2. **Characteristics by GATT property, not fixed UUID** — the WRITE-capable char for writes, the
+ *     NOTIFY/INDICATE-capable char for notifications. This absorbs the three observed layouts without
+ *     hardcoding UUIDs: V3 (one `B364` with WRITE+NOTIFY), V2 (write `B363`, notify `B364`), V1 (by property
+ *     among the `B362` set).
+ *  3. **A fixed 3-write handshake** then await the dash's reply: `0x30 CLIENT_INFO` → `0x50 REQUEST_BUILD_NET`
+ *     → `0x52 NOTIFY_AP_INFO` (the Gson creds body, built by [EcBtpApInfo]) → await `0x51`
+ *     `NOTIFY_BUILD_NET_FINISH` / `0x53 NOTIFY_CAR_NET_INFO`.
+ *
+ * Device-gated unknowns (design §11, one-tap BT-HCI snoop confirms): the exact GATT write **type**
+ * (with/without response) — resolved here by property, defaulting to with-response when the char advertises
+ * `WRITE` — and whether a non-Carbit-branded dash keeps `B360` or remaps the short id (absorbed by the
+ * caller passing `spec.bleServiceOverride`).
+ *
+ * @param context any [Context]; only the [BluetoothManager] system service is used.
+ * @param log verbose sink (matches `BleWakeUp`'s "one logged session reveals what happened" discipline).
+ */
+@SuppressLint("MissingPermission")
+class BleApInfoPush(
+    private val context: Context,
+    private val log: (String) -> Unit,
+) {
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+
+    @Volatile private var gatt: BluetoothGatt? = null
+    @Volatile private var done = false
+    @Volatile private var pendingService: UUID = DEFAULT_SERVICE_UUID // set per-call in pushApInfo
+    @Volatile private var resume: ((Boolean) -> Unit)? = null
+    private var notifyAcc = ByteArray(0)
+
+    /** Where we are in the fixed write handshake; advanced from each `onCharacteristicWrite` ack. */
+    private enum class Step { CLIENT_INFO, REQUEST_BUILD, AP_INFO, AWAIT_ACK }
+    private var step = Step.CLIENT_INFO
+
+    // Resolved from the service once discovered, by GATT property (not fixed UUID).
+    private var writeChar: BluetoothGattCharacteristic? = null
+    private var notifyChar: BluetoothGattCharacteristic? = null
+    private var writeType: Int = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+
+    // The three frames, captured once so the callback thread can advance the handshake without recomputing.
+    private lateinit var frameClientInfo: ByteArray
+    private lateinit var frameRequestBuild: ByteArray
+    private lateinit var frameApInfo: ByteArray
+
+    /**
+     * Connect to [mac], resolve chars on [service] by property, and run the AP-info handshake. Suspends until
+     * the dash acknowledges (`0x51`/`0x53` → `true`) or the attempt fails/times out (`false`). Never throws:
+     * every failure path resolves to `false` so the caller can fall back to the manual flow. On success the
+     * GATT is kept **open** (the dash sends `0x51`/`0x53` after joining, and dashes may rely on the BLE link
+     * staying up for the session) — the caller owns teardown via [close]; on any failure it is closed here.
+     */
+    suspend fun pushApInfo(
+        mac: String,
+        service: UUID,
+        ssid: String,
+        pwd: String,
+        ip: String,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+    ): Boolean = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        cont.invokeOnCancellation { finishFailure("cancelled") }
+        this.resume = { ok -> if (cont.isActive) cont.resumeWith(Result.success(ok)) }
+        pendingService = service
+
+        frameClientInfo = EcBtpProtocol.build(EcBtpProtocol.CMD_EC_BTP_CLIENT_INFO.toByte(), ByteArray(0))
+        frameRequestBuild = EcBtpProtocol.build(EcBtpProtocol.CMD_REQUEST_BUILD_NET.toByte(), ByteArray(0))
+        frameApInfo = EcBtpApInfo.frame(ssid = ssid, pwd = pwd, ip = ip)
+        log("[BLE-AP] pushApInfo mac=$mac service=$service ssid='$ssid' pwdLen=${pwd.length} ip=$ip")
+        log("[BLE-AP] frames: CLIENT_INFO=${hex(frameClientInfo)} REQUEST_BUILD=${hex(frameRequestBuild)} " +
+            "AP_INFO=${hex(frameApInfo)}")
+
+        val adapter = btManager?.adapter
+        if (adapter == null || !adapter.isEnabled) { finishFailure("Bluetooth adapter unavailable/off"); return@suspendCancellableCoroutine }
+        val device = try {
+            adapter.getRemoteDevice(mac)
+        } catch (e: Exception) {
+            finishFailure("bad BLE MAC '$mac': ${e.message}"); return@suspendCancellableCoroutine
+        }
+
+        handler.postDelayed({ if (!done) finishFailure("timeout after ${timeoutMs}ms") }, timeoutMs)
+
+        log("[BLE-AP] connecting to $mac …")
+        gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            device.connectGatt(context, false, gattCallback, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
+        } else {
+            device.connectGatt(context, false, gattCallback)
+        }
+        if (gatt == null) finishFailure("connectGatt returned null")
+    }
+
+    /** Tear down the GATT (idempotent). The caller invokes this from its transport `close()`. */
+    fun close() {
+        val g = gatt
+        gatt = null
+        try { g?.disconnect() } catch (_: Exception) {}
+        try { g?.close() } catch (_: Exception) {}
+    }
+
+    private fun finishSuccess() {
+        if (done) return
+        done = true
+        log("[BLE-AP] *** dash acknowledged AP info — Wi-Fi handoff complete (GATT kept open) ***")
+        resume?.invoke(true)
+    }
+
+    private fun finishFailure(reason: String) {
+        if (done) return
+        done = true
+        log("[BLE-AP] FAILED: $reason")
+        close()
+        resume?.invoke(false)
+    }
+
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            log("[BLE-AP] connState status=$status newState=$newState")
+            if (status != BluetoothGatt.GATT_SUCCESS) { finishFailure("connectGatt status=$status"); return }
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> { log("[BLE-AP] connected; discovering services"); g.discoverServices() }
+                BluetoothProfile.STATE_DISCONNECTED -> if (!done) finishFailure("disconnected mid-handshake")
+            }
+        }
+
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) { finishFailure("svc discovery status=$status"); return }
+            log("[BLE-AP] services discovered; requesting MTU 185 (matches official app)")
+            if (!g.requestMtu(185)) finishFailure("requestMtu failed")
+        }
+
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            log("[BLE-AP] MTU = $mtu (status=$status)")
+            if (!resolveChars(g)) return
+            enableNotifications(g)
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            if (d.uuid != CCCD_UUID) return
+            if (status != BluetoothGatt.GATT_SUCCESS) { finishFailure("CCCD write status=$status"); return }
+            log("[BLE-AP] notifications enabled; starting handshake -> 0x30 CLIENT_INFO")
+            step = Step.CLIENT_INFO
+            writeFrame(g, frameClientInfo)
+        }
+
+        override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) { finishFailure("write status=$status at step=$step"); return }
+            when (step) {
+                Step.CLIENT_INFO -> { step = Step.REQUEST_BUILD; log("[BLE-AP] -> 0x50 REQUEST_BUILD_NET"); writeFrame(g, frameRequestBuild) }
+                Step.REQUEST_BUILD -> { step = Step.AP_INFO; log("[BLE-AP] -> 0x52 NOTIFY_AP_INFO"); writeFrame(g, frameApInfo) }
+                Step.AP_INFO -> { step = Step.AWAIT_ACK; log("[BLE-AP] AP_INFO sent; awaiting 0x51/0x53 from dash") }
+                Step.AWAIT_ACK -> {}
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
+            handleNotification(c.value)
+        }
+
+        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
+            handleNotification(value)
+        }
+    }
+
+    /** Pick the WRITE and NOTIFY characteristics by GATT property (V3 single char / V2 split / V1 by property). */
+    private fun resolveChars(g: BluetoothGatt): Boolean {
+        val svc = g.getService(pendingService) ?: run { finishFailure("service $pendingService not present"); return false }
+        val chars = svc.characteristics
+        log("[BLE-AP] service $pendingService chars=${chars.map { "${shortId(it.uuid)}:0x${"%02x".format(it.properties)}" }}")
+        val write = chars.firstOrNull {
+            it.properties and (BluetoothGattCharacteristic.PROPERTY_WRITE or
+                BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
+        }
+        val notify = chars.firstOrNull {
+            it.properties and (BluetoothGattCharacteristic.PROPERTY_NOTIFY or
+                BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
+        }
+        if (write == null) { finishFailure("no WRITE-capable characteristic on $pendingService"); return false }
+        if (notify == null) { finishFailure("no NOTIFY-capable characteristic on $pendingService"); return false }
+        writeChar = write
+        notifyChar = notify
+        writeType = if (write.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) {
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        } else {
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        }
+        log("[BLE-AP] write=${shortId(write.uuid)} (type=${if (writeType == BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) "with-resp" else "no-resp"}) notify=${shortId(notify.uuid)}")
+        return true
+    }
+
+    private fun enableNotifications(g: BluetoothGatt) {
+        val notify = notifyChar ?: run { finishFailure("notify char unresolved"); return }
+        if (!g.setCharacteristicNotification(notify, true)) { finishFailure("setCharacteristicNotification(true) returned false"); return }
+        val cccd = notify.getDescriptor(CCCD_UUID) ?: run { finishFailure("CCCD descriptor not present"); return }
+        val enable = if (notify.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) {
+            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        } else {
+            BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+        }
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeDescriptor(cccd, enable) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            run { cccd.value = enable; g.writeDescriptor(cccd) }
+        }
+        if (!ok) finishFailure("writeDescriptor (enable notify) failed")
+    }
+
+    private fun writeFrame(g: BluetoothGatt, frame: ByteArray) {
+        val w = writeChar ?: run { finishFailure("write char unresolved"); return }
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(w, frame, writeType) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            run { w.value = frame; w.writeType = writeType; g.writeCharacteristic(w) }
+        }
+        if (!ok) finishFailure("writeCharacteristic submit failed at step=$step")
+    }
+
+    /** Accumulate BLE chunks and extract complete EcBtp frames; a `0x51`/`0x53` reply ends the handshake. */
+    private fun handleNotification(data: ByteArray) {
+        notifyAcc += data
+        log("[BLE-AP] <- chunk(${data.size}) acc=${hex(notifyAcc)}")
+        while (true) {
+            val start = notifyAcc.indexOf(EcBtpProtocol.START)
+            if (start < 0) { notifyAcc = ByteArray(0); return }
+            if (start > 0) notifyAcc = notifyAcc.copyOfRange(start, notifyAcc.size)
+            if (notifyAcc.size < 5) return // need at least the 5-byte frame overhead
+            val declared = notifyAcc[2].toInt() and 0xFF
+            val total = declared + 1 // full frame = (declared-4 payload) + 5 overhead
+            if (total < 5) { notifyAcc = notifyAcc.copyOfRange(1, notifyAcc.size); continue } // bad len; skip this START
+            if (notifyAcc.size < total) return // wait for the rest of the frame
+            val frameBytes = notifyAcc.copyOfRange(0, total)
+            notifyAcc = notifyAcc.copyOfRange(total, notifyAcc.size)
+            val parsed = EcBtpProtocol.parse(frameBytes)
+            if (parsed == null) { log("[BLE-AP] <- dropped malformed frame ${hex(frameBytes)}"); continue }
+            onEcBtpFrame(parsed.command)
+        }
+    }
+
+    private fun onEcBtpFrame(cmd: Byte) {
+        val c = cmd.toInt() and 0xFF
+        log("[BLE-AP] <- EcBtp cmd=0x${"%02x".format(c)}")
+        when (c) {
+            EcBtpProtocol.CMD_NOTIFY_BUILD_NET_FINISH, EcBtpProtocol.CMD_NOTIFY_CAR_NET_INFO -> finishSuccess()
+            else -> log("[BLE-AP] (ignoring cmd 0x${"%02x".format(c)} while awaiting 0x51/0x53)")
+        }
+    }
+
+    private fun hex(b: ByteArray): String = b.joinToString(" ") { "%02x".format(it.toInt() and 0xFF) }
+    private fun shortId(u: UUID): String = u.toString().substring(4, 8).uppercase()
+
+    companion object {
+        /** Carbit-generic B36x service (design Appendix A). Overridable per-bike via `spec.bleServiceOverride`. */
+        val DEFAULT_SERVICE_UUID: UUID = UUID.fromString("0000B360-D6D8-C7EC-BDF0-EAB1BFC6BCBC")
+        val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
+        private const val DEFAULT_TIMEOUT_MS = 25_000L
+    }
+}

@@ -96,6 +96,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.jmdns)
+    implementation(libs.gson)
     implementation(libs.protobuf.java)
     implementation(libs.conscrypt.android)
     implementation(libs.osmdroid)

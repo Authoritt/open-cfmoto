@@ -531,6 +531,8 @@
     <string name="main_phone_hotspot_settings_failed">Couldn\'t open hotspot settings — open them manually</string>
     <string name="main_phone_hotspot_cancelled">Phone hotspot setup cancelled</string>
     <string name="main_phone_hotspot_waiting_named">Waiting for hotspot \"%1$s\" — bike should join your phone</string>
+    <string name="main_phone_hotspot_readable_title">Enter this Wi-Fi on the dash</string>
+    <string name="main_phone_hotspot_readable_message">Your phone is now hosting the Wi-Fi. On the dash pairing screen, enter:\n\nNetwork: %1$s\nPassword: %2$s\nPhone IP: %3$s\n\nIf the dash doesn\'t find it, it may only support 2.4 GHz Wi-Fi.</string>
     <string name="main_donate_failed">Couldn\'t open donate link</string>
     <string name="main_settings_failed">Couldn\'t open app settings</string>
     <string name="main_download_failed">Couldn\'t open download link</string>
