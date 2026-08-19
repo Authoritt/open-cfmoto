@@ -1091,4 +1091,6 @@
     <string name="ovk_dash_aa_note">Con Google o Waze, el tablero lo pinta Android Auto: conecta la moto primero y luego pon el destino — llega al tablero por Android Auto, no por nuestro mapa.</string>
     <string name="ovk_provider_aa_hint">Google/Waze: el tablero lo pinta Android Auto — conecta primero y luego pon el destino.</string>
     <string name="ovk_dash_connect_first">Conecta la moto primero</string>
+    <string name="ovk_btn_needs_bt_on">Enciende el Bluetooth para manejar el tablero con el manillar — si no, ▲/▼ sólo cambian el volumen del teléfono.</string>
+    <string name="ovk_btn_needs_bt_permission">Concede el permiso de Bluetooth para manejar el tablero con el manillar — si no, ▲/▼ sólo cambian el volumen del teléfono.</string>
 </resources>

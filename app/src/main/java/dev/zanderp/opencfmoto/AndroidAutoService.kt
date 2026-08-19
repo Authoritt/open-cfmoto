@@ -8,6 +8,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import androidx.core.content.ContextCompat
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -36,6 +37,12 @@ class AndroidAutoService : Service() {
     private var pipeline: VideoPipeline? = null
     private var receiver: AaReceiver? = null
     private var mediaButtons: MediaButtonBridge? = null
+
+    /** Armed when the handlebar bridge had to be skipped, so it can start the moment Bluetooth is on. */
+    private var btWatcher: android.content.BroadcastReceiver? = null
+
+    /** One rider-facing warning per service life — not one per reconnect attempt. */
+    private var handlebarWarned = false
     private var wakeLock: PowerManager.WakeLock? = null
     /** Dim screen wake while GPX Presentation is up (VirtualDisplay stalls if the phone sleeps hard). */
     private var screenWakeLock: PowerManager.WakeLock? = null
@@ -538,10 +545,71 @@ class AndroidAutoService : Service() {
     private fun ensureMediaButtons() {
         if (mediaButtons != null) return
         if (!canCaptureHandlebarButtons()) {
+            // Bluetooth off (or CONNECT not granted) at this instant. This used to just log and give
+            // up FOREVER: nothing re-ran this, so a rider who turned Bluetooth on afterwards got a
+            // dead handlebar and ▲/▼ fell through to plain phone volume — reported from the bike as
+            // "I turned Bluetooth on and the rocker still drives my phone's volume". Now we say it out
+            // loud and arm a watcher so the bridge starts the moment Bluetooth comes up.
+            val why = if (!BluetoothHelper.hasConnectPermission(applicationContext)) {
+                R.string.ovk_btn_needs_bt_permission
+            } else {
+                R.string.ovk_btn_needs_bt_on
+            }
             LogBus.log("[BTN] skipped — Bluetooth off or no Nearby/BLUETOOTH_CONNECT (no focus/volume hijack)")
+            notifyHandlebarUnavailable(why)
+            watchBluetoothForButtons()
             return
         }
         mediaButtons = MediaButtonBridge(applicationContext, LogBus::log).also { it.start() }
+        LogBus.log("[BTN] handlebar bridge started (▲/▼ drive the dash, not phone volume)")
+    }
+
+    /** Tell the RIDER, once per service life — a silent log is why this went unnoticed on the bike. */
+    private fun notifyHandlebarUnavailable(msgRes: Int) {
+        if (handlebarWarned) return
+        handlebarWarned = true
+        val text = getString(msgRes)
+        ConnectionState.set(ConnectionState.phase, text)
+        watchdogHandler.post {
+            try {
+                android.widget.Toast.makeText(applicationContext, text, android.widget.Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Start the handlebar bridge as soon as Bluetooth turns on. Registered only when we actually had
+     * to skip, and torn down in [onDestroy]; [ensureMediaButtons] is idempotent, so a duplicate
+     * broadcast costs nothing.
+     */
+    private fun watchBluetoothForButtons() {
+        if (btWatcher != null) return
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: android.content.Intent?) {
+                if (i?.action != android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED) return
+                val state = i.getIntExtra(
+                    android.bluetooth.BluetoothAdapter.EXTRA_STATE,
+                    android.bluetooth.BluetoothAdapter.ERROR,
+                )
+                if (state == android.bluetooth.BluetoothAdapter.STATE_ON) {
+                    LogBus.log("[BTN] Bluetooth came on — starting the handlebar bridge now")
+                    ensureMediaButtons()
+                }
+            }
+        }
+        btWatcher = r
+        try {
+            ContextCompat.registerReceiver(
+                this,
+                r,
+                android.content.IntentFilter(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        } catch (e: Exception) {
+            LogBus.log("[BTN] could not watch Bluetooth state: $e")
+            btWatcher = null
+        }
     }
 
     /** Handlebar bridge needs BT on + CONNECT (API 31+); otherwise it fights phone media for nothing. */
@@ -662,6 +730,8 @@ class AndroidAutoService : Service() {
         try { TripAutoLog.sync(this) } catch (_: Exception) {}
         try { mediaButtons?.stop() } catch (_: Exception) {}
         mediaButtons = null
+        try { btWatcher?.let { unregisterReceiver(it) } } catch (_: Exception) {}
+        btWatcher = null
         try { receiver?.stop() } catch (_: Exception) {}
         receiver = null
         AaVideoBridge.pipeline = null

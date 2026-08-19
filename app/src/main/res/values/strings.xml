@@ -1112,4 +1112,6 @@
     <string name="ovk_dash_aa_note">With Google or Waze, Android Auto paints the bike dash: connect the bike first, then set the destination — it reaches the dash through Android Auto, not through our map.</string>
     <string name="ovk_provider_aa_hint">Google/Waze: Android Auto paints the dash — connect first, then set the destination.</string>
     <string name="ovk_dash_connect_first">Connect to the bike first</string>
+    <string name="ovk_btn_needs_bt_on">Turn Bluetooth on so the handlebar controls the dash — otherwise ▲/▼ just change your phone volume.</string>
+    <string name="ovk_btn_needs_bt_permission">Allow the Bluetooth permission so the handlebar controls the dash — otherwise ▲/▼ just change your phone volume.</string>
 </resources>
