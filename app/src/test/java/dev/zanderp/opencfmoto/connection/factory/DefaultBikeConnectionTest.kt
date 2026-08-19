@@ -2,6 +2,7 @@ package dev.zanderp.opencfmoto.connection.factory
 
 import android.app.Activity
 import android.content.Context
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -117,6 +118,45 @@ class DefaultBikeConnectionTest {
             conn.connect()
             val retryingAgain = withTimeout(5_000) { conn.state.first { it is ConnState.Retrying } }
             assertTrue(retryingAgain is ConnState.Retrying)
+            conn.disconnect()
+            withTimeout(5_000) { conn.state.first { it == ConnState.Idle } }
+        }
+    }
+
+    @Test
+    fun `connect while a driver is active is a no-op (idempotency guard, no bounce)`() {
+        runBlocking {
+            val transport = RecordingTransport()
+            val link = RecordingLink()
+            val conn = DefaultBikeConnection(
+                transport = transport,
+                links = listOf(link),
+                spec = softApSpec(),
+                io = NoActivityIo, // default maxAttempts -> the driver stays alive, retrying
+            )
+
+            // The ideal "healthy active" state is Connected, but reaching it needs transport.open() to run,
+            // which needs a real Context from requireContext() -> a real Activity, which cannot be
+            // instantiated in a plain JVM unit test (android.jar stubs throw; no Robolectric on the
+            // classpath). So we park the driver in its (equally active) backoff Retrying instead. The guard
+            // keys on runJob.isActive, true for Connecting/Connected/Retrying alike, so this proves the same
+            // invariant: a redundant connect() while active must NOT bounce.
+            conn.connect()
+            withTimeout(5_000) { conn.state.first { it is ConnState.Retrying } }
+
+            // Redundant connect(): with the guard it returns at once; without it, it would cancel the live
+            // job, whose finally runs teardownInternal() (transport.close + link.stop) and flashes Idle. The
+            // teardown counters are the reliable, monotonic bounce detector.
+            conn.connect()
+            delay(300) // give any (erroneous) cancel+finally time to tear down before we assert it did not
+
+            assertEquals("redundant connect must not tear down the transport (no bounce)", 0, transport.closed)
+            assertEquals("redundant connect must not stop the links (no bounce)", 0, link.stopped)
+            assertTrue(
+                "the driver must still be actively (re)connecting, not bounced to a terminal state",
+                conn.state.value is ConnState.Retrying || conn.state.value is ConnState.Connecting,
+            )
+
             conn.disconnect()
             withTimeout(5_000) { conn.state.first { it == ConnState.Idle } }
         }

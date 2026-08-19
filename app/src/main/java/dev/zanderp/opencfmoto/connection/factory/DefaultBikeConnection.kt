@@ -138,14 +138,22 @@ class DefaultBikeConnection(
     private var endpoint: BikeEndpoint? = null
 
     override fun connect() {
-        // section-6 auto-connect gate: the phone-hotspot path needs a foreground Activity; headless defers.
-        if (spec.mode == TransportKind.PHONE_HOTSPOT && io.activityOrNull() == null) {
-            _state.value = ConnState.Error("needs foreground", recoverable = false)
-            return
-        }
         synchronized(lifecycleLock) {
+            // Idempotency guard: a healthy/starting driver is left alone, so a redundant or auto-connect
+            // re-trigger is a no-op, not a cancel+relaunch that would tear down a live transport/LinkSession
+            // and bounce the state through Idle. A cancelled or finished job reports isActive == false at
+            // once, so disconnect->connect and post-fatal reconnect still proceed — this does NOT reintroduce
+            // F3 (which was about disconnect nulling runJob, now fixed by the cancel-then-join handoff below).
+            if (runJob?.isActive == true) return
+
+            // section-6 auto-connect gate: the phone-hotspot path needs a foreground Activity; headless defers.
+            if (spec.mode == TransportKind.PHONE_HOTSPOT && io.activityOrNull() == null) {
+                _state.value = ConnState.Error("needs foreground", recoverable = false)
+                return
+            }
+
             val previous = runJob
-            previous?.cancel() // stop any prior driver eagerly...
+            previous?.cancel() // stop any prior (finished/cancelled) driver eagerly...
             runJob = scope.launch {
                 previous?.join() // ...and wait for its finally (teardown + terminal state) before starting.
                 supervise()
