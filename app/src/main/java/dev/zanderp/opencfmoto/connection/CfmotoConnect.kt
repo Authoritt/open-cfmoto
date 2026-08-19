@@ -75,11 +75,12 @@ object CfmotoConnect {
      * Flip only after an owner-in-the-loop SoftAP + P2P regression pass on the bike; instant rollback is
      * flipping this back.
      *
-     * SCOPE: this flag governs ONLY the 450NK SoftAP/P2P classic path. BLE-capable phone-hotspot QRs
-     * (Rieju/Carbit action=128 with a `bm=` mac, see [isBleHotspot]) ALREADY route through the factory's
+     * SCOPE: this flag governs ONLY the 450NK SoftAP/P2P classic path. Phone-hotspot QRs for a KNOWN-Rieju
+     * model id ([BLE_HOTSPOT_MODEL_IDS], see [isBleHotspot]) ALREADY route through the factory's
      * `PhoneHotspotTransport` in [joinWifi] REGARDLESS of this flag — the Rieju has no working classic path,
-     * and that connector keeps its own readable-creds manual fallback. So flipping this true does NOT change
-     * phone-hotspot routing; it only switches SoftAP/P2P over.
+     * and that connector keeps its own readable-creds manual fallback. Every OTHER phone-hotspot bike (Zontes,
+     * opaque CARBIT tokens with no modelid) keeps the proven manual tether path. So flipping this true does
+     * NOT change phone-hotspot routing; it only switches SoftAP/P2P over.
      *
      * Before flipping true (the call site below is fire-and-forget — `.create(...).connect()`, instance
      * discarded — so several lifecycle guarantees are NOT yet met; the phone-hotspot path already lives with
@@ -97,14 +98,26 @@ object CfmotoConnect {
     private const val USE_FACTORY = false
 
     /**
-     * A BLE-capable phone-hosts-hotspot QR: phone-hotspot (`supportsPhoneHotspot && pwd.isEmpty()` — the
-     * classic gate) AND carrying a BLE MAC (`bm=`, e.g. the Rieju/Carbit action=128 case). These route to
-     * the factory's `PhoneHotspotTransport` (P2P group-owner + BLE B360 `0x52`); a phone-hotspot QR WITHOUT a
-     * mac has no dash to program over BLE, so it stays on the old manual tether assist ([joinPhoneHotspot]).
+     * The phone-hotspot model(s) whose dash needs the factory's Wi-Fi-Direct + BLE `PhoneHotspotTransport`:
+     * the Rieju Aventura 500 (Carbit `action=128`, protocol RE'd in spec Appendix A; QR `modelid=43402`).
+     * Every OTHER phone-hotspot bike — Zontes, and opaque `CARBIT` tokens that carry NO `modelid` — keeps the
+     * proven Android-tether [joinPhoneHotspot] path. Extend this set ONLY after a model is confirmed ON THE
+     * BIKE to need the Wi-Fi-Direct + BLE path (adding a working tether bike here would REGRESS it).
+     */
+    private val BLE_HOTSPOT_MODEL_IDS = setOf("43402")
+
+    /**
+     * A phone-hosts-hotspot QR for a model that needs the factory's `PhoneHotspotTransport` (P2P group-owner +
+     * BLE B360 `0x52`): phone-hotspot (`supportsPhoneHotspot && pwd.isEmpty()` — the classic gate), carrying a
+     * BLE MAC (`bm=`), AND a known-Rieju `modelid` ([BLE_HOTSPOT_MODEL_IDS]). Narrowed to the Rieju on PURPOSE:
+     * the shape (action=128 + `bm=` + empty pwd) is shared by other Carbit-family bikes (e.g. Zontes) that
+     * work TODAY on the manual tether path, so routing by shape alone would divert them onto the Rieju-only
+     * BLE/Wi-Fi-Direct connector (regression). Any non-matching phone-hotspot QR stays on [joinPhoneHotspot].
      * Pure + `internal` so [joinWifi]'s routing decision is unit-testable without a live scan.
      */
     internal fun isBleHotspot(qr: QrData): Boolean =
-        qr.supportsPhoneHotspot && qr.pwd.isEmpty() && !qr.mac.isNullOrEmpty()
+        qr.supportsPhoneHotspot && qr.pwd.isEmpty() && !qr.mac.isNullOrEmpty() &&
+            qr.modelId in BLE_HOTSPOT_MODEL_IDS
 
     /**
      * The process-global bike PXC client. Reuse [BikeLink.prober] if it already exists (e.g. the AA

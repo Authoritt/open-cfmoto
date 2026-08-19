@@ -5,45 +5,65 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** The Rieju's Carbit model id (QR `modelid=43402`) — the only phone-hotspot model on the factory path. */
+private const val RIEJU = "43402"
+
 /**
  * Guards the [CfmotoConnect.joinWifi] routing decision that sends the Rieju to the NEW
- * `PhoneHotspotTransport`: a BLE-capable phone-hotspot QR (`supportsPhoneHotspot && pwd.isEmpty()` AND a
- * `bm=` mac) → factory; anything else (SoftAP/P2P, or a phone-hotspot QR with no mac) → the classic path.
- * Pure: [CfmotoConnect] holds only `const val`s, so touching [CfmotoConnect.isBleHotspot] never spins up
- * Android; [QrData] is a plain data class.
+ * `PhoneHotspotTransport`. The predicate is Rieju-model-SCOPED, not QR-shape-scoped: other Carbit-family
+ * phone-hotspot bikes (Zontes, opaque `CARBIT` tokens with no `modelid`) share the exact shape
+ * (`action=128` + `bm=` mac + empty pwd) but work TODAY on the classic tether [CfmotoConnect.joinPhoneHotspot]
+ * path, so they MUST resolve to `false` here (regression guard). Pure: [CfmotoConnect] holds only `const`/
+ * stateless members, so touching [CfmotoConnect.isBleHotspot] never spins up Android; [QrData] is a plain
+ * data class.
  */
 class CfmotoConnectRoutingTest {
 
-    private fun qr(action: Int, ssid: String = "", pwd: String = "", mac: String? = "DD:0D:30:16:6B:50") =
-        QrData(
-            ssid = ssid, pwd = pwd, auth = null, mac = mac, name = null,
-            action = action, modelId = null, sn = null, channel = null,
-        )
+    private fun qr(
+        action: Int,
+        ssid: String = "",
+        pwd: String = "",
+        mac: String? = "DD:0D:30:16:6B:50",
+        modelId: String? = null,
+    ) = QrData(
+        ssid = ssid, pwd = pwd, auth = null, mac = mac, name = null,
+        action = action, modelId = modelId, sn = null, channel = null,
+    )
 
-    @Test fun `Rieju action=128 with a bm mac and no pwd is a BLE hotspot`() {
-        assertTrue(CfmotoConnect.isBleHotspot(qr(action = 128, ssid = "", mac = "DD:0D:30:16:6B:50")))
+    @Test fun `Rieju action=128 with a mac, empty pwd and modelid 43402 is a BLE hotspot`() {
+        assertTrue(CfmotoConnect.isBleHotspot(qr(action = 128, modelId = RIEJU)))
     }
 
-    @Test fun `blank-ssid QR with only a mac (no bit7) is a BLE hotspot via the mac fallback`() {
-        // QrData.supportsPhoneHotspot also fires on blank ssid + mac; pwd empty + mac present -> BLE hotspot.
-        assertTrue(CfmotoConnect.isBleHotspot(qr(action = 0, ssid = "", mac = "DD:0D:30:16:6B:50")))
+    @Test fun `Rieju blank-ssid QR (mac fallback) with modelid 43402 is a BLE hotspot`() {
+        // QrData.supportsPhoneHotspot also fires on blank ssid + mac (no bit7); still gated by the modelid.
+        assertTrue(CfmotoConnect.isBleHotspot(qr(action = 0, modelId = RIEJU)))
     }
 
-    @Test fun `phone-hotspot QR carrying a SoftAP pwd is NOT a BLE hotspot`() {
-        // bit7 + a password is a SoftAP bike (classic gate is supportsPhoneHotspot && pwd.isEmpty()).
-        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 128, ssid = "CFMOTO-9", pwd = "secret")))
+    // --- REGRESSION GUARD: Zontes / opaque CARBIT phone-hotspot bikes stay on the classic tether path ---
+
+    @Test fun `Zontes-shape opaque CARBIT (action=128 + mac, NO modelid) is NOT a BLE hotspot`() {
+        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 128, modelId = null)))
     }
 
-    @Test fun `phone-hotspot QR without a mac is NOT a BLE hotspot (manual assist)`() {
-        // action=128 but no bm= -> nothing to program over BLE -> stays on joinPhoneHotspot.
-        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 128, ssid = "MyDash", mac = null)))
+    @Test fun `phone-hotspot with a non-Rieju modelid is NOT a BLE hotspot`() {
+        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 128, modelId = "12345")))
+    }
+
+    // --- Other conjuncts still gate even WITH the Rieju modelid ---
+
+    @Test fun `Rieju-modelid QR carrying a SoftAP pwd is NOT a BLE hotspot`() {
+        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 128, ssid = "CFMOTO-9", pwd = "secret", modelId = RIEJU)))
+    }
+
+    @Test fun `Rieju-modelid QR without a mac is NOT a BLE hotspot (manual assist)`() {
+        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 128, ssid = "MyDash", mac = null, modelId = RIEJU)))
     }
 
     @Test fun `SoftAP QR is not a BLE hotspot`() {
-        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 1, ssid = "CFMOTO", pwd = "12345678", mac = null)))
+        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 1, ssid = "CFMOTO", pwd = "12345678", mac = null, modelId = RIEJU)))
     }
 
     @Test fun `P2P DIRECT QR is not a BLE hotspot`() {
-        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 8, ssid = "DIRECT-ab")))
+        assertFalse(CfmotoConnect.isBleHotspot(qr(action = 8, ssid = "DIRECT-ab", modelId = RIEJU)))
     }
 }
