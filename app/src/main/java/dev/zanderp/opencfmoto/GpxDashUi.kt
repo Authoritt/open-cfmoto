@@ -1451,7 +1451,7 @@ class GpxDashUi(
         root.findViewById<View>(R.id.gpx_search_close).setOnClickListener { hideSheets() }
         dimmer.setOnClickListener { hideSheets() }
         // Phone → dash search bridge: the phone keyboard types into this (projected) search.
-        DashRemote.setHandler { q, typeahead ->
+        if (projected) DashRemote.setHandler { q, typeahead ->
             main.post {
                 if (!isAlive() || released) return@post
                 menuPanel.visibility = View.GONE
@@ -1466,7 +1466,7 @@ class GpxDashUi(
         }
         // Phone/cockpit → dash navigate bridge: re-target the LIVE (already-projected) dash to a
         // destination — route + turn-by-turn — with NO PXC reconnect. Same path as the "Go" button.
-        DashRemote.setNavHandler { place ->
+        if (projected) DashRemote.setNavHandler { place ->
             main.post {
                 if (!isAlive() || released) return@post
                 startNavigationTo(place)
@@ -1474,7 +1474,7 @@ class GpxDashUi(
         }
         // Phone/cockpit → dash theme bridge: the on-map day/night/auto toggle flips the LIVE dash in
         // place (no PXC reconnect). The phone already wrote NightPrefs; applyMapTheme re-reads it.
-        DashRemote.setThemeHandler {
+        if (projected) DashRemote.setThemeHandler {
             main.post {
                 if (!isAlive() || released) return@post
                 applyMapTheme()
@@ -1628,6 +1628,12 @@ class GpxDashUi(
             }
             // Manual stop ≠ arrival — never flash "Arrived at …" / parking sheet.
             finishToFreeRideUi("Navigation finished", offerParking = false)
+            // This same class runs TWICE: once here on the phone and once projected to the bike, each
+            // with its own snapshot of the route. Ending it on the phone used to clear only the phone's
+            // copy, so the dash kept showing (and speaking) a route the rider had just cancelled. The
+            // projected instance owns the DashRemote channel, so tell it through the same door the
+            // cockpit uses. No-op when THIS is the projected one — it just did the work.
+            if (!projected) runCatching { DashRemote.endNavigation() }
             refreshChrome()
             hideSheets()
             onChromeFocus?.invoke("default")
@@ -1638,7 +1644,7 @@ class GpxDashUi(
         // stop turn-by-turn voice, and drop to free ride on the LIVE (already-projected) dash — with
         // NO PXC reconnect. Without this the bike dash kept the stale route AND kept speaking guidance
         // (the phone only updated GpxSession; the dash never learned the trip ended).
-        DashRemote.setEndHandler {
+        if (projected) DashRemote.setEndHandler {
             main.post {
                 if (!isAlive() || released) return@post
                 endRouteNow()
@@ -2264,7 +2270,7 @@ class GpxDashUi(
                     renderMusicStrip()
                 }
             }
-            DashRemote.setPanelHandler { on ->
+            if (projected) DashRemote.setPanelHandler { on ->
                 main.post {
                     if (released || !isAlive()) return@post
                     panelOn = on
@@ -2920,11 +2926,11 @@ class GpxDashUi(
                 NowPlaying.stop(context)
             }
         }
-        DashRemote.setHandler(null)
-        DashRemote.setNavHandler(null)
-        DashRemote.setThemeHandler(null)
-        DashRemote.setEndHandler(null)
-        DashRemote.setPanelHandler(null)
+        if (projected) DashRemote.setHandler(null)
+        if (projected) DashRemote.setNavHandler(null)
+        if (projected) DashRemote.setThemeHandler(null)
+        if (projected) DashRemote.setEndHandler(null)
+        if (projected) DashRemote.setPanelHandler(null)
         main.removeCallbacksAndMessages(null)
         locationListener?.let { listener ->
             try { locationManager?.removeUpdates(listener) } catch (_: Exception) {}
