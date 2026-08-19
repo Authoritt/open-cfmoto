@@ -22,9 +22,11 @@ object DashRemote {
     /**
      * The Map|Panel mode the phone last chose (true = Panel, i.e. the map + now-playing split). A dash
      * reads this on bind so it starts in the right mode even when the rider flipped the toggle BEFORE
-     * this dash began projecting.
+     * this dash began projecting. Defaults to Panel (true): the now-playing strip is the desired default and
+     * matches CockpitScreen.cockpitMode's default, so a dash that binds BEFORE the cockpit's async
+     * applyPanelMode sync lands still starts WITH the music strip. The Map toggle flips it to false.
      */
-    @Volatile var panelMode: Boolean = false
+    @Volatile var panelMode: Boolean = true
         private set
 
     /** True when a dash is bound and can receive a search (e.g. projected to the bike). */

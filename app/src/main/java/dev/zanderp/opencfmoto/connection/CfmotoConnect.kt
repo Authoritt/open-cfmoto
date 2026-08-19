@@ -27,6 +27,7 @@ import dev.zanderp.opencfmoto.BikeWifiP2p
 import dev.zanderp.opencfmoto.CrashGuard
 import dev.zanderp.opencfmoto.DashClockBle
 import dev.zanderp.opencfmoto.DashMemory
+import dev.zanderp.opencfmoto.DashRemote
 import dev.zanderp.opencfmoto.EasyConnDiscovery
 import dev.zanderp.opencfmoto.EasyConnProber
 import dev.zanderp.opencfmoto.GpxSession
@@ -582,6 +583,10 @@ object CfmotoConnect {
         tearDownForModeSwitch(activity, clearMap = false, clearMirror = true)
         applyProfile(activity, saved)
         ConnectionState.set(Phase.MIRRORING, BikeMemory.lastBikeName(activity) ?: saved.ssid)
+        // Belt-and-suspenders for the panel-mode race: re-assert the current Map|Panel flag before the
+        // projection binds, so the dash reading DashRemote.panelMode on bind and the live panel handler agree
+        // — the now-playing strip shows in Panel mode without waiting for the cockpit's async applyPanelMode.
+        DashRemote.applyPanelMode(DashRemote.panelMode)
         joinWifi(activity, saved, gateOnAaSteady = false, activity = activity, preferFactory = preferFactory)
     }
 

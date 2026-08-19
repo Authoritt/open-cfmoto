@@ -2263,6 +2263,9 @@ class GpxDashUi(
                 }
             }
             renderMusicStrip()
+            // Diagnostic for the on-bike panel test: did the strip start visible, and is there actually a
+            // media session to render? ("no music playing" would explain an empty strip even when panelOn.)
+            log("[MAP] panel strip: panelMode=$panelOn nowPlaying=${NowPlaying.state.value.hasSession}")
         }
 
         log(
