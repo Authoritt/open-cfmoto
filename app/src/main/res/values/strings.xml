@@ -734,6 +734,20 @@
     <string name="ovk_conn_p2p_desc">The dash\'s Wi-Fi Direct</string>
     <string name="ovk_conn_rieju_desc">Wi-Fi Direct + Bluetooth</string>
     <string name="ovk_conn_tether_desc">Share the phone\'s hotspot</string>
+    <!-- AUTO row detail: names the connector it actually picked (e.g. "Automatic · CFMoto Direct (P2P)") -->
+    <string name="ovk_conn_auto_detail">Automatic · %1$s (%2$s)</string>
+    <!-- connector help sheet ("?" affordance next to the connector row / in the picker header) -->
+    <string name="ovk_conn_help_title">How does your bike connect?</string>
+    <string name="ovk_conn_help_softap_desc">The dash creates its own Wi-Fi network and your phone joins it.</string>
+    <string name="ovk_conn_help_softap_tested">Tested on: CFMoto, Voge, Benelli, QJ, Morini and more</string>
+    <string name="ovk_conn_help_p2p_desc">Wi-Fi Direct with the dash. Usually connects faster.</string>
+    <string name="ovk_conn_help_p2p_tested">Tested on: CFMoto (DIRECT-… networks)</string>
+    <string name="ovk_conn_help_rieju_title">Rieju (Wi-Fi Direct + Bluetooth)</string>
+    <string name="ovk_conn_help_rieju_desc">Your phone creates the network and hands the dash the password over Bluetooth.</string>
+    <string name="ovk_conn_help_rieju_tested">⚠ New — not yet tested on a bike</string>
+    <string name="ovk_conn_help_tether_desc">Turn on your phone\'s hotspot and the dash joins it.</string>
+    <string name="ovk_conn_help_tether_tested">Tested on: Zontes</string>
+    <string name="ovk_conn_help_footer">If it won\'t connect, try a different connector from the Garage.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Camera permission required</string>
     <string name="ovk_scan_perm_body">to scan the dash QR</string>

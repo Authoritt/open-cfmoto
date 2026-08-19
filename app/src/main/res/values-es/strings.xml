@@ -716,6 +716,20 @@
     <string name="ovk_conn_p2p_desc">El Wi-Fi Directo del tablero</string>
     <string name="ovk_conn_rieju_desc">Wi-Fi Directo + Bluetooth</string>
     <string name="ovk_conn_tether_desc">Comparte el hotspot del teléfono</string>
+    <!-- fila AUTO: nombra el conector que realmente usará (p.ej. "Automático · CFMoto Directo (P2P)") -->
+    <string name="ovk_conn_auto_detail">Automático · %1$s (%2$s)</string>
+    <!-- hoja de ayuda de conectores ("?" junto a la fila / en la cabecera del selector) -->
+    <string name="ovk_conn_help_title">¿Cómo se conecta tu moto?</string>
+    <string name="ovk_conn_help_softap_desc">El tablero crea su propia red Wi-Fi y el teléfono se une.</string>
+    <string name="ovk_conn_help_softap_tested">Probado en: CFMoto, Voge, Benelli, QJ, Morini y más</string>
+    <string name="ovk_conn_help_p2p_desc">Wi-Fi Directo con el tablero. Suele conectar más rápido.</string>
+    <string name="ovk_conn_help_p2p_tested">Probado en: CFMoto (redes DIRECT-…)</string>
+    <string name="ovk_conn_help_rieju_title">Rieju (Wi-Fi Direct + Bluetooth)</string>
+    <string name="ovk_conn_help_rieju_desc">El teléfono crea la red y le pasa la clave al tablero por Bluetooth.</string>
+    <string name="ovk_conn_help_rieju_tested">⚠ Nuevo — aún sin probar en una moto</string>
+    <string name="ovk_conn_help_tether_desc">Enciendes el hotspot del teléfono y el tablero se une.</string>
+    <string name="ovk_conn_help_tether_tested">Probado en: Zontes</string>
+    <string name="ovk_conn_help_footer">Si no conecta, prueba con otro conector desde el Garaje.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Permiso de cámara necesario</string>
     <string name="ovk_scan_perm_body">para escanear el QR del tablero</string>

@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -65,13 +66,13 @@ import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.ManualWifiPairing
 import dev.zanderp.opencfmoto.QrData
 import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
-import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.fromQr
 import dev.zanderp.opencfmoto.ui.components.GhostButton
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.connection.ConnectorChoiceDialog
-import dev.zanderp.opencfmoto.ui.connection.connectorShortLabel
-import dev.zanderp.opencfmoto.ui.connection.detectedTransportToken
+import dev.zanderp.opencfmoto.ui.connection.ConnectorHelpButton
+import dev.zanderp.opencfmoto.ui.connection.ConnectorHelpDialog
+import dev.zanderp.opencfmoto.ui.connection.connectorRowLabel
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -96,6 +97,7 @@ fun ScanScreen(nav: NavController) {
     // durable home for this is the Garage). Null = still scanning → the scan controls show as before.
     var pairedQr by remember { mutableStateOf<QrData?>(null) }
     var showConnectorPicker by remember { mutableStateOf(false) }
+    var showConnectorHelp by remember { mutableStateOf(false) }
     var connectorRefresh by remember { mutableStateOf(0) }
     DisposableEffect(Unit) { onDispose { executor.shutdown(); runCatching { scanner.close() } } }
 
@@ -212,26 +214,25 @@ fun ScanScreen(nav: NavController) {
         pairedQr?.let { qr ->
             val current = remember(connectorRefresh) { BikeMemory.connectorChoice(ctx, qr.ssid) }
             val detected = remember(qr) { ConnectionSpec.fromQr(qr).mode }
-            val choiceLabel = connectorShortLabel(current)
-            val affordance = if (current == ConnectorChoice.AUTO) {
-                "$choiceLabel (${detectedTransportToken(detected)})"
-            } else {
-                choiceLabel
-            }
+            val affordance = connectorRowLabel(current, detected)
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 MonoLabel(stringResource(R.string.ovk_scan_paired), color = c.inkDim)
-                Row(
-                    Modifier.clip(RoundedCornerShape(999.dp)).background(c.surface1).border(1.dp, c.line, RoundedCornerShape(999.dp)).clickable { showConnectorPicker = true }.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.ovk_garage_conn_label) + ": " + affordance + "  ▾",
-                        color = c.ink, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(999.dp)).background(c.surface1).border(1.dp, c.line, RoundedCornerShape(999.dp)).clickable { showConnectorPicker = true }.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            stringResource(R.string.ovk_garage_conn_label) + ": " + affordance + "  ▾",
+                            color = c.ink, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    ConnectorHelpButton(onClick = { showConnectorHelp = true })
                 }
                 GhostButton(stringResource(R.string.ovk_scan_done), { nav.popBackStack() }, Modifier.fillMaxWidth())
             }
@@ -251,6 +252,10 @@ fun ScanScreen(nav: NavController) {
                     onDismiss = { showConnectorPicker = false },
                 )
             }
+        }
+
+        if (showConnectorHelp) {
+            ConnectorHelpDialog(onDismiss = { showConnectorHelp = false })
         }
     }
 }

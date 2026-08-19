@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -52,7 +53,7 @@ import dev.zanderp.opencfmoto.connection.factory.fromQr
 import dev.zanderp.opencfmoto.settings.MapProvider
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.connection.ConnectorChoiceDialog
-import dev.zanderp.opencfmoto.ui.connection.connectorShortLabel
+import dev.zanderp.opencfmoto.ui.connection.connectorRowLabel
 import dev.zanderp.opencfmoto.ui.settings.Header
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 
@@ -167,6 +168,9 @@ private fun BikeRow(
     val mode = remember(bike.raw, refreshKey) { BikeMemory.bikeMode(ctx, ssid) }
     val provider = remember(bike.raw, refreshKey) { bike.qr?.let { BikeMemory.specFor(ctx, it)?.defaultMapProvider } }
     val connector = remember(bike.raw, refreshKey) { BikeMemory.connectorChoice(ctx, ssid) }
+    // Same AUTO-fallback reasoning as the connectorFor dialog below: a corrupt/legacy entry with no
+    // parseable QR has no detected mode — SOFT_AP is purely a display fallback, never persisted from here.
+    val detected = remember(bike.raw) { bike.qr?.let { ConnectionSpec.fromQr(it).mode } ?: TransportKind.SOFT_AP }
     val borderColor = if (current) c.ignition.copy(alpha = 0.45f) else c.line
     Row(
         // The row itself still opens the mode picker (unchanged tap target/hint); the map tag below is
@@ -197,7 +201,7 @@ private fun BikeRow(
                 onClick = onProviderClick,
             )
             ConnectorTag(
-                text = connectorShortLabel(connector),
+                text = connectorRowLabel(connector, detected),
                 pinned = connector != ConnectorChoice.AUTO,
                 onClick = onConnectorClick,
             )
@@ -235,7 +239,7 @@ private fun ConnectorTag(text: String, pinned: Boolean, onClick: () -> Unit) {
     val bd = if (pinned) c.ignition.copy(alpha = 0.35f) else c.line
     Box(
         Modifier.clip(RoundedCornerShape(6.dp)).background(bg).border(1.dp, bd, RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(horizontal = 7.dp, vertical = 3.dp),
-    ) { Text(text, color = fg, fontFamily = FontFamily.Monospace, fontSize = 9.sp) }
+    ) { Text(text, color = fg, fontFamily = FontFamily.Monospace, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
 // Brand names stay literal; only the MIRROR ("Espejo") label is translated — mirrors the labeling this

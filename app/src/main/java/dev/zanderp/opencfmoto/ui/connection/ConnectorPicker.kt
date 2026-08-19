@@ -9,16 +9,25 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +64,33 @@ fun detectedTransportToken(mode: TransportKind): String = when (mode) {
 }
 
 /**
+ * The rider-facing connector NAME for a detected [TransportKind] — the same plain-language names
+ * [connectorShortLabel] uses for a pinned [ConnectorChoice], so an Automatic row can say which
+ * connector it actually picked instead of leaving the rider to guess.
+ */
+@Composable
+fun connectorNameForTransport(mode: TransportKind): String = when (mode) {
+    TransportKind.SOFT_AP -> stringResource(R.string.ovk_conn_softap)
+    TransportKind.P2P -> stringResource(R.string.ovk_conn_p2p)
+    TransportKind.PHONE_HOTSPOT -> stringResource(R.string.ovk_conn_rieju)
+    TransportKind.TETHER -> stringResource(R.string.ovk_conn_tether)
+}
+
+/**
+ * The rider-facing connector row/tag text (Scan's confirm pill, Garage's per-bike tag). For
+ * [ConnectorChoice.AUTO] this names the connector that will actually be used — e.g.
+ * "Automatic · CFMoto Direct (P2P)" — because "Automatic" alone tells the rider nothing when a
+ * connection fails. A pinned choice still shows just its own name, unchanged.
+ */
+@Composable
+fun connectorRowLabel(choice: ConnectorChoice, detected: TransportKind): String =
+    if (choice == ConnectorChoice.AUTO) {
+        stringResource(R.string.ovk_conn_auto_detail, connectorNameForTransport(detected), detectedTransportToken(detected))
+    } else {
+        connectorShortLabel(choice)
+    }
+
+/**
  * Per-bike connection-mechanism picker. [current] highlights today's choice; [detected] is
  * `ConnectionSpec.fromQr(qr).mode`, surfaced on the Automatic row so the rider sees what AUTO would use.
  */
@@ -68,11 +104,18 @@ fun ConnectorChoiceDialog(
 ) {
     val c = LocalCockpitColors.current
     val detectedToken = detectedTransportToken(detected)
+    var showHelp by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onDismiss) {
         Surface(color = c.surface1, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, c.line)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Text(stringResource(R.string.ovk_dlg_conn_title, bikeName), color = c.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text(stringResource(R.string.ovk_garage_conn_subtitle), color = c.inkDim, fontSize = 12.5.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.ovk_dlg_conn_title, bikeName), color = c.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text(stringResource(R.string.ovk_garage_conn_subtitle), color = c.inkDim, fontSize = 12.5.sp)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    ConnectorHelpButton(onClick = { showHelp = true })
+                }
                 Spacer(Modifier.size(4.dp))
                 ConnRow(
                     stringResource(R.string.ovk_conn_opt_auto),
@@ -102,6 +145,9 @@ fun ConnectorChoiceDialog(
             }
         }
     }
+    if (showHelp) {
+        ConnectorHelpDialog(onDismiss = { showHelp = false })
+    }
 }
 
 /** A single option row (title + subtitle + chevron), highlighted when it is the current choice. */
@@ -119,5 +165,79 @@ private fun ConnRow(title: String, subtitle: String, primary: Boolean, onClick: 
             Text(subtitle, color = c.inkDim, fontSize = 11.sp)
         }
         Text("›", color = c.inkFaint, fontSize = 18.sp)
+    }
+}
+
+/**
+ * Small "?" affordance that opens [ConnectorHelpDialog] (a plain-language explanation of the four
+ * connectors). Shared by the Scan confirm row and [ConnectorChoiceDialog]'s header, so one
+ * implementation covers both places a rider might wonder "what does this mean?".
+ */
+@Composable
+fun ConnectorHelpButton(onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Box(
+        Modifier.size(24.dp).clip(RoundedCornerShape(999.dp)).background(c.groundHi).border(1.dp, c.line, RoundedCornerShape(999.dp)).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Text("?", color = c.inkDim, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+}
+
+/**
+ * "How does my bike connect?" sheet: the four connectors, each with a plain-language explanation and
+ * which bikes it has been confirmed on. UI/copy only — no connection logic lives here. The Rieju row
+ * is marked unproven ON PURPOSE (deliberate honesty, not a bug): only flip its "tested on" line once a
+ * bike has actually confirmed it.
+ */
+@Composable
+fun ConnectorHelpDialog(onDismiss: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(color = c.surface1, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, c.line)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(stringResource(R.string.ovk_conn_help_title), color = c.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Column(
+                    Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ConnectorHelpRow(
+                        stringResource(R.string.ovk_conn_opt_softap),
+                        stringResource(R.string.ovk_conn_help_softap_desc),
+                        stringResource(R.string.ovk_conn_help_softap_tested),
+                    )
+                    ConnectorHelpRow(
+                        stringResource(R.string.ovk_conn_opt_p2p),
+                        stringResource(R.string.ovk_conn_help_p2p_desc),
+                        stringResource(R.string.ovk_conn_help_p2p_tested),
+                    )
+                    ConnectorHelpRow(
+                        stringResource(R.string.ovk_conn_help_rieju_title),
+                        stringResource(R.string.ovk_conn_help_rieju_desc),
+                        stringResource(R.string.ovk_conn_help_rieju_tested),
+                        warnTested = true,
+                    )
+                    ConnectorHelpRow(
+                        stringResource(R.string.ovk_conn_tether),
+                        stringResource(R.string.ovk_conn_help_tether_desc),
+                        stringResource(R.string.ovk_conn_help_tether_tested),
+                    )
+                }
+                Text(stringResource(R.string.ovk_conn_help_footer), color = c.inkDim, fontSize = 11.5.sp)
+            }
+        }
+    }
+}
+
+/**
+ * One connector's plain-language row in [ConnectorHelpDialog]: what it does + which bikes confirmed
+ * it. [warnTested] renders the "tested on" line in the theme's warning accent (never a raw red/[c.fault])
+ * — used for Rieju's honest "not yet tested on a bike" line, which is deliberate, not an error state.
+ */
+@Composable
+private fun ConnectorHelpRow(title: String, desc: String, tested: String, warnTested: Boolean = false) {
+    val c = LocalCockpitColors.current
+    Column {
+        Text(title, color = c.ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Text(desc, color = c.inkDim, fontSize = 11.5.sp)
+        Text(tested, color = if (warnTested) c.warn else c.inkFaint, fontSize = 11.sp)
     }
 }
