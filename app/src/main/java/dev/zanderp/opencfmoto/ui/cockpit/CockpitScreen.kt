@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,9 +67,9 @@ import dev.zanderp.opencfmoto.ui.components.MapThemeToggle
 import dev.zanderp.opencfmoto.settings.DashRenderer
 import dev.zanderp.opencfmoto.ui.Routes
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.NavLauncher
@@ -126,8 +127,11 @@ fun CockpitScreen(nav: NavController) {
     val store = remember { SettingsStore(ctx.applicationContext) }
     val provider by store.mapProvider.collectAsStateWithLifecycle(initialValue = MapProvider.BUILTIN)
     val scope = rememberCoroutineScope()
-    var showDest by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
+    // Google Maps / Waze are separate apps: they take the destination through a deep link and do the
+    // navigating. Everything else (Propio, and Espejo — which mirrors this phone) is navigated by the
+    // cockpit itself on its own map. ONE destination box either way; only the submit differs.
+    val handsToNavApp = provider == MapProvider.GOOGLE || provider == MapProvider.WAZE
 
     fun route(dest: String) {
         val d = dest.trim()
@@ -139,8 +143,8 @@ fun CockpitScreen(nav: NavController) {
             else -> {
                 // Propio (built-in map): CONNECT + project our own map to the dash IN-PLACE via the connection
                 // factory — no GpxActivity/MainActivity bridge (which would flash the classic UI). Same direct
-                // path as the Dashboard's Conectar. (BUILTIN normally uses the in-cockpit search, which never
-                // calls route(); this is the fallback if a dialog ever routes a Propio destination here.)
+                // path as the Dashboard's Conectar. Defensive only: route() is reached from the destination
+                // box exclusively for Google/Waze — Propio destinations go to selectBuiltinDestination.
                 val activity = ctx.findActivity()
                 when {
                     activity == null -> LogBus.log("[cockpit] Conectar: sin Activity host — no se puede conectar")
@@ -500,7 +504,10 @@ fun CockpitScreen(nav: NavController) {
                 DestinationBar(
                     providerLabel = providerLabel(ctx, provider),
                     modifier = Modifier.weight(1f),
-                    onSearch = { if (provider == MapProvider.BUILTIN) showSearch = true else showDest = true },
+                    // ONE destination box for every provider (it used to pop a separate dialog for
+                    // Google/Waze, which the rider read as "a second popup instead of the box I was
+                    // already using"). What changes with the provider is only what submit does.
+                    onSearch = { showSearch = true },
                     onCycleProvider = { scope.launch { store.setMapProvider(nextProvider(provider)) } },
                 )
                 // Persistent day/night/auto toggle (compact) — flip the map look without leaving the map.
@@ -570,22 +577,31 @@ fun CockpitScreen(nav: NavController) {
             onClick = { locateMe() },
         )
 
-        // In-cockpit autocomplete search for the built-in Overtake map — native, drawn over the map,
-        // no GpxActivity handoff.
+        // The ONE destination box, for every provider — native autocomplete drawn over the map, no
+        // GpxActivity handoff and no second dialog. A pick on Propio/Espejo becomes a destination on
+        // our own map; on Google/Waze it is handed to that app, which is the only one that can put it
+        // on the dash (through Android Auto). Free text still works there too: the keyboard's "Ir"
+        // sends exactly what was typed — what the old dialog did, and the only way to reach a place
+        // the autocomplete can't find.
         if (showSearch) {
             CockpitSearchOverlay(
+                providerLabel = providerLabel(ctx, provider),
+                handsToNavApp = handsToNavApp,
                 onDismiss = { showSearch = false },
-                onPick = { place -> selectBuiltinDestination(place) },
+                onPick = { place ->
+                    if (handsToNavApp) {
+                        showSearch = false
+                        // The place NAME, not its lat/lon: the classic AA hand-off learned that a bare
+                        // "lat,lon (label)" opens Maps on an empty search, so it navigates by resolved
+                        // name too (MainActivity.sendDestinationToAndroidAuto).
+                        route(place.name)
+                    } else {
+                        selectBuiltinDestination(place)
+                    }
+                },
+                onSubmitText = { typed -> showSearch = false; route(typed) },
             )
         }
-    }
-
-    if (showDest) {
-        DestinationDialog(
-            provider = provider,
-            onDismiss = { showDest = false },
-            onGo = { dest -> showDest = false; route(dest) },
-        )
     }
 }
 
@@ -853,43 +869,12 @@ private fun nextProvider(p: MapProvider): MapProvider = when (p) {
     else -> MapProvider.BUILTIN
 }
 
-/** Type a destination; "Ir" hands it to the active provider (Google Maps / Waze navigate; Propio hub). */
-@Composable
-private fun DestinationDialog(provider: MapProvider, onDismiss: () -> Unit, onGo: (String) -> Unit) {
-    val c = LocalCockpitColors.current
-    val ctx = LocalContext.current
-    var text by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        titleContentColor = c.ink,
-        textContentColor = c.ink,
-        title = { Text(stringResource(R.string.ovk_where_to), fontWeight = FontWeight.Bold) },
-        text = {
-            Column {
-                Text(stringResource(R.string.ovk_route_with, providerLabel(ctx, provider)), color = c.inkDim, fontSize = 12.sp)
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    singleLine = true,
-                    placeholder = { Text(stringResource(R.string.ovk_address_or_place)) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onGo(text) }, enabled = text.isNotBlank()) {
-                Text(stringResource(R.string.ovk_go), color = if (text.isNotBlank()) c.ignition else c.inkFaint, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ovk_cancel), color = c.inkDim) } },
-    )
-}
-
 /**
- * Native in-cockpit search for the built-in ("Overtake") map: a focused field + a live results list,
- * tuned toward Google-Maps quality on the free stack (no paid Places API).
+ * The cockpit's ONE destination box, for every provider: a focused field + a live results list, tuned
+ * toward Google-Maps quality on the free stack (no paid Places API). Google/Waze used to get a separate
+ * little dialog instead — same job, second popup — so this now serves them too ([handsToNavApp]): the
+ * rider is told where the destination is going ("Ruta con Google Maps"), a pick is handed to that app,
+ * and the keyboard's "Ir" sends the typed text as-is, which is all the old dialog could do.
  *
  * Sources, biased to the rider's own fix (fallback: map center):
  *  - the extracted `PlaceSearch` (Overtake library) — its `query()` fans out to the platform Geocoder
@@ -908,8 +893,11 @@ private fun DestinationDialog(provider: MapProvider, onDismiss: () -> Unit, onGo
  */
 @Composable
 private fun CockpitSearchOverlay(
+    providerLabel: String,
+    handsToNavApp: Boolean,
     onDismiss: () -> Unit,
     onPick: (MapPlace) -> Unit,
+    onSubmitText: (String) -> Unit,
 ) {
     val c = LocalCockpitColors.current
     val ctx = LocalContext.current
@@ -1014,7 +1002,25 @@ private fun CockpitSearchOverlay(
                     onValueChange = { query = it },
                     singleLine = true,
                     placeholder = { Text(stringResource(R.string.ovk_search_address_or_place)) },
+                    // Google/Waze: the keyboard's action key IS the old dialog's "Ir" — free text goes
+                    // straight to that app, so a place the autocomplete can't find is still reachable.
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = if (handsToNavApp) ImeAction.Go else ImeAction.Default,
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onGo = { if (query.isNotBlank()) onSubmitText(query) },
+                    ),
                     modifier = Modifier.weight(1f).focusRequester(focus),
+                )
+            }
+            // Where this destination is going. Only for the apps that own the navigation — on Propio the
+            // cockpit itself navigates, and saying "Ruta con Overtake" would be noise.
+            if (handsToNavApp) {
+                Text(
+                    stringResource(R.string.ovk_route_with, providerLabel),
+                    color = c.inkDim,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 6.dp),
                 )
             }
 
