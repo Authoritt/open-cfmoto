@@ -748,6 +748,13 @@
     <string name="ovk_conn_lost_retry">Se perdió la conexión con la moto. Toca Conectar para reintentar.</string>
     <!-- motos cuyo conector necesita la app en pantalla (Rieju BLE / hotspot manual): no se conecta en segundo plano -->
     <string name="ovk_conn_needs_app">Esta moto se conecta solo con la app abierta. Toca Conectar.</string>
+    <!-- Comprobación previa de Wi-Fi Directo: los tres casos en los que el conector no puede ni empezar.
+         Cada uno dice QUÉ HACER; "escanea el QR otra vez" sería mal consejo en los tres, porque el garaje
+         está bien y lo que no está listo es el teléfono. -->
+    <string name="ovk_conn_wifi_off_phone_hosts">Enciende el Wi-Fi del teléfono: esta moto se conecta a una red que crea tu teléfono.</string>
+    <string name="ovk_conn_wifi_off_direct">Enciende el Wi-Fi del teléfono: esta moto se conecta por Wi-Fi Directo.</string>
+    <string name="ovk_conn_nearby_denied">Falta el permiso de dispositivos cercanos. Actívalo en Ajustes para que el teléfono pueda crear la red con la moto.</string>
+    <string name="ovk_conn_wifi_direct_unsupported">Este teléfono no puede crear la red que necesita esta moto. Prueba con otro conector desde el Garaje.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Permiso de cámara necesario</string>
     <string name="ovk_scan_perm_body">para escanear el QR del tablero</string>

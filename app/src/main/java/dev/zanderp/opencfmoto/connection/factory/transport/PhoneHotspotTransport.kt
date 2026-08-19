@@ -20,6 +20,7 @@ import dev.zanderp.opencfmoto.connection.factory.BikeTransport
 import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
 import dev.zanderp.opencfmoto.connection.factory.PlatformIO
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.TransportUnavailableException
 import dev.zanderp.opencfmoto.connection.factory.ble.BleApInfoPush
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -49,9 +50,23 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  *
  * **Isolation.** This connector owns its *own* [WifiP2pManager]/[WifiP2pManager.Channel]; it never touches
  * `BikeWifiP2p` (the P2P *client*-join path), so SoftAP/P2P behavior is unchanged.
+ *
+ * **Diagnosability (2026-08-19, from the Rieju owner's log).** `createGroup` failed twice in ~11 ms with the
+ * single word `ERROR`, before the BLE handshake could even start — no reason code, no precondition, no
+ * advice. So [open] now runs [WifiDirectPreflight] first (phone Wi-Fi on · Android 13+ `NEARBY_WIFI_DEVICES`
+ * granted · Wi-Fi Direct supported — the missing grant produces exactly that generic `ERROR (0)`), every
+ * framework rejection is logged by NAME and number, and a leftover group from a previous attempt is retired
+ * and the request re-issued EXACTLY ONCE. That repair is a precondition fix INSIDE the single connect
+ * attempt the contract allows — never a retry loop, never a second connector.
+ *
+ * @param msgs rider-facing text for the pre-flight failures, injected (localized) by
+ *   [dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory]; the default keeps this class
+ *   constructible from plain-JVM unit tests.
  */
 @SuppressLint("MissingPermission")
-class PhoneHotspotTransport : BikeTransport {
+class PhoneHotspotTransport(
+    private val msgs: WifiDirectMessages = WifiDirectMessages(),
+) : BikeTransport {
 
     // Lazy so merely *constructing* the transport (e.g. BikeConnectionFactory.selectTransport in a plain-JVM
     // unit test) never touches the Android main Looper — only open()/close(), which run on a device, do.
@@ -74,6 +89,11 @@ class PhoneHotspotTransport : BikeTransport {
 
         // Foreground gate (defensive — the driver already blocks the headless case; see class KDoc).
         val activity = io.activityOrNull() ?: throw IllegalStateException("needs foreground")
+
+        // 0) Preconditions FIRST: the three states in which Wi-Fi Direct cannot work at all. Each throws a
+        //    rider-facing "here is what to do" instead of letting the framework answer `ERROR` and leaving
+        //    both the rider and the log with nothing (the 2026-08-19 field failure).
+        WifiDirectPreflight.requireReady(appCtx, msgs, log, activity)
 
         // 1) Become the Wi-Fi Direct group owner and read the system-generated creds + our GO address.
         val group = createOwnerGroup(appCtx, log)
@@ -137,33 +157,57 @@ class PhoneHotspotTransport : BikeTransport {
      * Uses a `WIFI_P2P_CONNECTION_CHANGED` receiver plus a short poll so a DHCP/interface lag after the group
      * forms doesn't lose the creds. The group is kept up on success (the dash must join it); it is removed
      * only in [close].
+     *
+     * **Every rejection is named** (`ERROR (0)` / `P2P_UNSUPPORTED (1)` / `BUSY (2)`), and there is exactly
+     * ONE self-repair: a leftover group from a previous attempt — the prime suspect in the field log, where
+     * both failures landed right after `mode switch: stop previous projection (keep Wi-Fi)` — is inspected,
+     * removed, and the request re-issued a single time. `BUSY` and the generic `ERROR` share that one path,
+     * because OEM stacks report the same stale-group condition either way. `P2P_UNSUPPORTED` is not
+     * repairable and stops immediately with its own rider-facing message.
      */
     private suspend fun createOwnerGroup(appCtx: Context, log: (String) -> Unit): OwnerGroup =
         suspendCancellableCoroutine { cont ->
             val mgr = appCtx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
-            if (mgr == null) { cont.resumeWithException(IllegalStateException("device has no Wi-Fi P2P service")); return@suspendCancellableCoroutine }
+            if (mgr == null) {
+                cont.resumeWithException(
+                    TransportUnavailableException(msgs.unsupported, "device has no Wi-Fi P2P service"),
+                )
+                return@suspendCancellableCoroutine
+            }
             val chan = mgr.initialize(appCtx, Looper.getMainLooper(), null)
             manager = mgr
             channel = chan
 
             val settled = AtomicBoolean(false)
+            // The ONE repair this connect attempt is allowed. Spent, never reset: the connect-time contract is
+            // a single attempt, and a "clear the group and try again" loop is exactly how a connector that
+            // cannot work becomes an invisible one that retries forever.
+            val repairSpent = AtomicBoolean(false)
+            // While the repair runs the poller must not reap: the only group it could find is the STALE one we
+            // are about to remove, and resuming with its creds would hand the dash a network that is seconds
+            // from disappearing.
+            val repairing = AtomicBoolean(false)
+
             fun succeed(g: OwnerGroup) {
                 if (settled.compareAndSet(false, true)) {
                     unregisterReceiver(appCtx) // group stays up; only stop listening
                     cont.resume(g)
                 }
             }
-            fun failCleanup(reason: String) {
+            fun failCleanup(reason: String, rider: String? = null) {
                 if (settled.compareAndSet(false, true)) {
                     log("createOwnerGroup FAILED: $reason")
                     close() // remove the half-formed group + drop manager/channel
-                    cont.resumeWithException(IllegalStateException(reason))
+                    cont.resumeWithException(
+                        if (rider != null) TransportUnavailableException(rider, reason)
+                        else IllegalStateException(reason),
+                    )
                 }
             }
 
             // Read connection + group info; resume once both the GO address and creds are known.
             fun reap() {
-                if (settled.get()) return
+                if (settled.get() || repairing.get()) return
                 mgr.requestConnectionInfo(chan) { info: WifiP2pInfo? ->
                     if (info == null || !info.groupFormed) return@requestConnectionInfo
                     mgr.requestGroupInfo(chan) { grp: WifiP2pGroup? ->
@@ -189,35 +233,106 @@ class PhoneHotspotTransport : BikeTransport {
             cont.invokeOnCancellation { failCleanup("cancelled") }
 
             // Poll as a backstop for the CONNECTION_CHANGED broadcast (some stacks fire it before we register,
-            // or the createGroup listener never fires). Started unconditionally so the deadline always runs.
+            // or the createGroup listener never fires). Started unconditionally so the deadline always runs —
+            // it also bounds the repair below, which is why that repair needs no clock of its own.
             val deadline = System.currentTimeMillis() + CREATE_GROUP_TIMEOUT_MS
             val poller = object : Runnable {
                 override fun run() {
                     if (settled.get()) return
-                    if (System.currentTimeMillis() > deadline) { failCleanup("no P2P group formed within ${CREATE_GROUP_TIMEOUT_MS / 1000}s"); return }
+                    if (System.currentTimeMillis() > deadline) {
+                        failCleanup(
+                            "no Wi-Fi Direct group formed within ${CREATE_GROUP_TIMEOUT_MS / 1000}s " +
+                                "(the request was accepted, the group never came up)",
+                        )
+                        return
+                    }
                     reap()
                     handler.postDelayed(this, GROUP_POLL_INTERVAL_MS)
                 }
             }
             handler.postDelayed(poller, GROUP_POLL_INTERVAL_MS)
 
-            log("createGroup: becoming Wi-Fi Direct group owner (PXC server @ $DEFAULT_GO_IP)")
-            mgr.createGroup(chan, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    log("createGroup: onSuccess — waiting for the group to form")
-                    reap()
-                }
-                override fun onFailure(reason: Int) {
-                    // A stale group from a prior run makes createGroup return BUSY; retire it and let the
-                    // driver's retry re-enter, rather than wedging on a group we can't read creds from.
-                    if (reason == WifiP2pManager.BUSY) {
-                        runCatching { mgr.removeGroup(chan, null) }
-                        failCleanup("createGroup BUSY (stale group) — removed; will retry")
-                    } else {
-                        failCleanup("createGroup failed: ${reasonStr(reason)}")
+            /** Retire a leftover group — naming it first, because when there IS one that line is the diagnosis. */
+            fun removeStaleGroupThen(next: () -> Unit) {
+                val acted = AtomicBoolean(false)
+                fun remove() {
+                    runCatching {
+                        mgr.removeGroup(chan, object : WifiP2pManager.ActionListener {
+                            override fun onSuccess() {
+                                log("leftover group removed — re-issuing createGroup ONCE (bounded repair, not a retry loop)")
+                                handler.postDelayed({ next() }, REPAIR_SETTLE_MS)
+                            }
+                            override fun onFailure(reason: Int) {
+                                log(
+                                    "removeGroup rejected: ${WifiDirectPreflight.reasonName(reason)} — " +
+                                        "re-issuing createGroup ONCE anyway",
+                                )
+                                handler.postDelayed({ next() }, REPAIR_SETTLE_MS)
+                            }
+                        })
+                    }.onFailure { e ->
+                        log("removeGroup threw: ${e.message} — re-issuing createGroup ONCE anyway")
+                        handler.postDelayed({ next() }, REPAIR_SETTLE_MS)
                     }
                 }
-            })
+                runCatching {
+                    mgr.requestGroupInfo(chan) { grp: WifiP2pGroup? ->
+                        if (grp == null) {
+                            log("leftover group check: none present — the rejection was not a stale group")
+                        } else {
+                            log(
+                                "leftover group check: '${grp.networkName}' is still up " +
+                                    "(ours: ${grp.isGroupOwner}, joined dashes: ${grp.clientList?.size ?: 0})",
+                            )
+                        }
+                        if (acted.compareAndSet(false, true)) remove()
+                    }
+                }.onFailure { e ->
+                    log("leftover group check threw: ${e.message} — removing anyway")
+                    if (acted.compareAndSet(false, true)) remove()
+                }
+                // requestGroupInfo's callback is not guaranteed to arrive; the repair must never hang on it.
+                handler.postDelayed({
+                    if (acted.compareAndSet(false, true)) {
+                        log("leftover group check timed out — removing anyway")
+                        remove()
+                    }
+                }, GROUP_INFO_TIMEOUT_MS)
+            }
+
+            fun attemptCreate() {
+                log("createGroup: becoming Wi-Fi Direct group owner (PXC server @ $DEFAULT_GO_IP)")
+                mgr.createGroup(chan, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        log("createGroup: accepted by the framework — waiting for the group to form")
+                        reap()
+                    }
+                    override fun onFailure(reason: Int) {
+                        val named = WifiDirectPreflight.reasonName(reason)
+                        log("createGroup rejected: $named")
+                        // A verdict about the PHONE (P2P_UNSUPPORTED) cannot be repaired: say so plainly.
+                        val verdict = WifiDirectPreflight.blockerForReason(reason)
+                        if (verdict != null) {
+                            failCleanup(
+                                "createGroup rejected: $named — ${WifiDirectPreflight.technical(verdict)}",
+                                WifiDirectPreflight.riderMessage(verdict, msgs),
+                            )
+                            return
+                        }
+                        if (!repairSpent.compareAndSet(false, true)) {
+                            failCleanup("createGroup rejected again ($named) after the one repair this attempt allows")
+                            return
+                        }
+                        repairing.set(true)
+                        removeStaleGroupThen {
+                            repairing.set(false)
+                            if (!settled.get()) attemptCreate()
+                        }
+                    }
+                })
+            }
+
+            attemptCreate()
         }
 
     override fun close() {
@@ -254,18 +369,16 @@ class PhoneHotspotTransport : BikeTransport {
         }
     }
 
-    private fun reasonStr(reason: Int): String = when (reason) {
-        WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED"
-        WifiP2pManager.ERROR -> "ERROR"
-        WifiP2pManager.BUSY -> "BUSY"
-        WifiP2pManager.NO_SERVICE_REQUESTS -> "NO_SERVICE_REQUESTS"
-        else -> "reason=$reason"
-    }
-
     private companion object {
         private const val TAG = "PhoneHotspotTransport"
         private const val DEFAULT_GO_IP = "192.168.49.1"
         private const val CREATE_GROUP_TIMEOUT_MS = 15_000L
         private const val GROUP_POLL_INTERVAL_MS = 500L
+
+        /** Let the framework settle after retiring a leftover group, before re-issuing the request. */
+        private const val REPAIR_SETTLE_MS = 400L
+
+        /** Cap on the "which group is actually up?" question, so the repair can never hang on its callback. */
+        private const val GROUP_INFO_TIMEOUT_MS = 1_500L
     }
 }

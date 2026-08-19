@@ -768,6 +768,14 @@
     <string name="ovk_conn_lost_retry">Lost the connection to the bike. Tap Connect to try again.</string>
     <!-- bikes whose connector needs the app on screen (Rieju BLE handoff / manual hotspot): background connect refused -->
     <string name="ovk_conn_needs_app">This bike only connects with the app open. Tap Connect.</string>
+    <!-- Wi-Fi Direct pre-flight: the three states in which the connectors that use it cannot even start.
+         Each says what to DO, because "couldn't connect, scan the QR again" is wrong advice for all three:
+         the garage entry is fine, the phone isn't ready. No internal words here (no reason codes, no
+         "group owner") - those belong in the log. -->
+    <string name="ovk_conn_wifi_off_phone_hosts">Turn the phone\'s Wi-Fi on: this bike connects to a network your phone creates.</string>
+    <string name="ovk_conn_wifi_off_direct">Turn the phone\'s Wi-Fi on: this bike connects over Wi-Fi Direct.</string>
+    <string name="ovk_conn_nearby_denied">Nearby devices permission is off. Turn it on in Settings so the phone can set up the network with the bike.</string>
+    <string name="ovk_conn_wifi_direct_unsupported">This phone can\'t create the network this bike needs. Try another connector from the Garage.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Camera permission required</string>
     <string name="ovk_scan_perm_body">to scan the dash QR</string>

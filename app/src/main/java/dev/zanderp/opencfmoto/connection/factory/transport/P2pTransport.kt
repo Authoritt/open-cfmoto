@@ -29,8 +29,31 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  *
  * `BikeWifiP2p.connect` takes a [QrData]. [ConnectionSpec] does not persist the raw QR `action` bitmask,
  * so we reconstruct the minimal QrData the join actually reads (ssid/pwd/mac); see [qrFor].
+ *
+ * **The same blind spot the Rieju connector had** (fixed 2026-08-19): this path drives the very same
+ * `WifiP2pManager`, so it fails the same way — instantly, with the framework's generic `ERROR`. It now runs
+ * [WifiDirectPreflight] before handing over to [BikeWifiP2p], which names the three states in which Wi-Fi
+ * Direct cannot work at all (phone Wi-Fi off · Android 13+ `NEARBY_WIFI_DEVICES` not granted · no Wi-Fi
+ * Direct on this device) and tells the rider what to do about each.
+ *
+ * That check is worth its weight here for a reason beyond tidiness: this repo's own note on the owner's
+ * 450NK ("discoverPeers/credential/MAC all ERROR instantly", `BikeWifiP2p.kt`) is the exact signature of a
+ * missing `NEARBY_WIFI_DEVICES` grant on Android 13+, and that bike consequently learned `"AP"` as its
+ * winner. Whether the grant revives Wi-Fi Direct there is a HYPOTHESIS to be tested ON the bike — not a
+ * claim, and nothing here forces the connector on anyone: the rider still picks it.
+ *
+ * **What this wrapper can and cannot see.** [BikeWifiP2p] logs the per-call reason codes of `discoverPeers`,
+ * the credential join and the MAC join under its own `[P2P]` tag, but its `onFailed` hands us only the final
+ * human reason string — the individual codes are NOT observable from here, and `BikeWifiP2p` is deliberately
+ * not modified (wrap-not-rewrite: it is also the classic path). So we log what we can name precisely: the
+ * pre-flight verdict before the attempt, and the terminal reason after it.
+ *
+ * @param msgs rider-facing text for the pre-flight failures, injected (localized) by
+ *   [dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory].
  */
-class P2pTransport : BikeTransport {
+class P2pTransport(
+    private val msgs: WifiDirectMessages = WifiDirectMessages(),
+) : BikeTransport {
 
     @Volatile private var logCb: ((String) -> Unit)? = null
 
@@ -38,6 +61,11 @@ class P2pTransport : BikeTransport {
         val appCtx = ctx.applicationContext
         val logCb: (String) -> Unit = { msg -> io.log(TAG, msg) }
         this.logCb = logCb
+
+        // Preconditions FIRST — the three states in which no Wi-Fi Direct call can succeed. Without this the
+        // failure arrives as BikeWifiP2p's timeout ~12 s later, or as an instant generic ERROR, and the rider
+        // is told to re-scan a QR that was never the problem.
+        WifiDirectPreflight.requireReady(appCtx, msgs, logCb, io.activityOrNull())
 
         val qr = qrFor(spec)
         // Mirror CfmotoConnect.joinWifiP2p:410-415: give a proven P2P device the full window; bail fast
@@ -73,6 +101,10 @@ class P2pTransport : BikeTransport {
                 // BikeWifiP2p's own timeout fires onFailed too, so this also covers the "no group formed" case.
                 onFailed = { reason ->
                     if (resumed.compareAndSet(false, true)) {
+                        // The reason string is all BikeWifiP2p surfaces (its per-call reason codes stay in its
+                        // own [P2P] log lines — see the class KDoc). Logged here as well so the failure is
+                        // readable under THIS connector's tag without cross-referencing two tags by timestamp.
+                        logCb("Wi-Fi Direct join failed: $reason")
                         cont.resumeWithException(IllegalStateException("Wi-Fi Direct join failed: $reason"))
                     }
                 },

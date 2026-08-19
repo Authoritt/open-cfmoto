@@ -132,6 +132,19 @@ object BikeMemory {
     /** The connector `AUTO` resolves to for [qr] — see [autoDetectedSpec]. */
     fun autoDetectedMode(ctx: Context, qr: QrData): TransportKind = autoDetectedSpec(ctx, qr).mode
 
+    /**
+     * The connector this bike will ACTUALLY use on the next connect: the rider's pin if there is one, else
+     * what detection says today. Composed exactly like
+     * [dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory.create] does it (a pin is law;
+     * otherwise re-derive), so nothing can decide "how does this bike connect?" one way here and another way
+     * at connect time.
+     *
+     * Two callers need it BEFORE any connection exists: auto-connect (which gate applies to this bike —
+     * `autoConnectGateFor`) and Scan (does this bike need the nearby-devices grant — `usesWifiDirect`).
+     */
+    fun effectiveMode(ctx: Context, qr: QrData): TransportKind =
+        ConnectorChoice.transportFor(connectorChoice(ctx, qr)) ?: autoDetectedMode(ctx, qr)
+
     fun select(ctx: Context, raw: String) {
         prefs(ctx).edit().putString(KEY_SELECTED, raw).apply()
     }
@@ -342,13 +355,8 @@ object BikeMemory {
         // (phone hosts the net, creds over Bluetooth) and the rider-facing HOTSPOT connector is
         // TransportKind.TETHER (rider turns the Android hotspot on). TransportKind is internal plumbing and
         // is persisted inside the spec JSON by name, so it keeps its own names.
-        val forcedMode: TransportKind = when (choice) {
-            ConnectorChoice.SOFT_AP -> TransportKind.SOFT_AP
-            ConnectorChoice.P2P -> TransportKind.P2P
-            ConnectorChoice.BLE -> TransportKind.PHONE_HOTSPOT
-            ConnectorChoice.HOTSPOT -> TransportKind.TETHER
-            ConnectorChoice.AUTO -> autoDetected(prefs, qr).mode
-        }
+        val forcedMode: TransportKind =
+            ConnectorChoice.transportFor(choice) ?: autoDetected(prefs, qr).mode
         val base = specFor(prefs, qr) ?: autoDetected(prefs, qr)
         saveSpec(prefs, base.copy(mode = forcedMode))
     }

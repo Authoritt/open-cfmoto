@@ -128,8 +128,21 @@ class DefaultBikeConnectionTest {
 
     private fun softApSpec() = ConnectionSpec(bikeId = "test-bike", mode = TransportKind.SOFT_AP)
 
+    /**
+     * A [PlatformIO] whose Activity is present — the PHONE_HOTSPOT/TETHER driver gate refuses otherwise, so
+     * a test about what `open()` throws needs to get past it. The Activity token is never touched.
+     */
+    private object ForegroundIo : PlatformIO {
+        override val appContext: Context = ContextWrapper(null)
+        override val log: (String, String) -> Unit = { _, _ -> }
+        private val activity = Activity()
+        override fun activityOrNull(): Activity = activity
+        override fun videoSink(): VideoSink = throw IllegalStateException("no video sink in unit test")
+    }
+
     /** Stand-ins for the localized texts `BikeConnectionFactory` injects (`ovk_conn_*`). */
     private val RESCAN = "Couldn't connect with CFMoto Wi-Fi. Scan the bike's QR again to update the garage."
+    private val WIFI_OFF = "Turn the phone's Wi-Fi on: this bike connects to a network your phone creates."
     private val LOST = "Lost the connection to the bike. Tap Connect to try again."
     private val NEEDS_APP = "This bike only connects with the app open. Tap Connect."
 
@@ -202,6 +215,39 @@ class DefaultBikeConnectionTest {
             assertTrue("must fail fast, with no backoff wait (took ${elapsed}ms)", elapsed < RETRY_BASE_MS)
             assertTrue("teardown still runs on the fast-fail path", transport.closed >= 1)
             assertTrue("link.stop() still runs on the fast-fail path", link.stopped >= 1)
+        }
+    }
+
+    @Test
+    fun `a failure that NAMES its cause overrides the generic re-scan text`() {
+        runBlocking {
+            // The Rieju case: the garage entry is right and re-scanning the QR fixes NOTHING — the phone's
+            // Wi-Fi is off (or the Android 13+ nearby-devices grant is missing). A transport that can name
+            // that owns the rider's words; everything else keeps the "scan the QR again" default.
+            val transport = object : BikeTransport {
+                @Volatile var opened = 0
+                @Volatile var closed = 0
+                override suspend fun open(ctx: Context, spec: ConnectionSpec, io: PlatformIO): BikeEndpoint {
+                    opened++
+                    throw TransportUnavailableException(WIFI_OFF, "phone Wi-Fi is OFF — Wi-Fi Direct needs the radio on")
+                }
+                override fun close() { closed++ }
+            }
+            val conn = DefaultBikeConnection(
+                transport = transport,
+                links = listOf(RecordingLink()),
+                spec = ConnectionSpec(bikeId = "test-bike", mode = TransportKind.PHONE_HOTSPOT),
+                io = ForegroundIo, // PHONE_HOTSPOT needs the app on screen, so the driver gate must pass
+                initialFailureReason = RESCAN,
+            )
+
+            conn.connect()
+            val terminal = withTimeout(5_000) { conn.state.first { it is ConnState.Error } } as ConnState.Error
+
+            assertEquals("the named cause must reach the rider, not the generic re-scan text", WIFI_OFF, terminal.reason)
+            assertEquals(false, terminal.recoverable)
+            assertEquals("still exactly ONE attempt — naming the cause is not a licence to retry", 1, transport.opened)
+            assertTrue("teardown still runs", transport.closed >= 1)
         }
     }
 

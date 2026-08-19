@@ -16,6 +16,7 @@ import dev.zanderp.opencfmoto.connection.factory.transport.P2pTransport
 import dev.zanderp.opencfmoto.connection.factory.transport.PhoneHotspotTransport
 import dev.zanderp.opencfmoto.connection.factory.transport.SoftApTransport
 import dev.zanderp.opencfmoto.connection.factory.transport.TetherTransport
+import dev.zanderp.opencfmoto.connection.factory.transport.WifiDirectMessages
 
 /**
  * Assembles a two-layer [BikeConnection] from a scanned QR (design doc 2026-08-18 §3): pick the Layer-1
@@ -24,13 +25,41 @@ import dev.zanderp.opencfmoto.connection.factory.transport.TetherTransport
  */
 object BikeConnectionFactory {
 
-    /** Layer-1 selection: the transport that gets the phone onto this bike's network. */
-    fun selectTransport(spec: ConnectionSpec): BikeTransport = when (spec.mode) {
+    /**
+     * Layer-1 selection: the transport that gets the phone onto this bike's network.
+     *
+     * [msgs] carries the rider-facing text for the Wi-Fi-Direct pre-flight failures (phone Wi-Fi off, the
+     * Android 13+ nearby-devices grant missing, a phone with no Wi-Fi Direct). It defaults to empty so the
+     * pure/plain-JVM callers — and every existing unit test — keep constructing transports with one
+     * argument; [create] is the caller that has a Context and fills it in ([wifiDirectMessages]).
+     */
+    fun selectTransport(
+        spec: ConnectionSpec,
+        msgs: WifiDirectMessages = WifiDirectMessages(),
+    ): BikeTransport = when (spec.mode) {
         TransportKind.SOFT_AP -> SoftApTransport()
-        TransportKind.P2P -> P2pTransport()
-        TransportKind.PHONE_HOTSPOT -> PhoneHotspotTransport()
+        TransportKind.P2P -> P2pTransport(msgs)
+        TransportKind.PHONE_HOTSPOT -> PhoneHotspotTransport(msgs)
         TransportKind.TETHER -> TetherTransport()
     }
+
+    /**
+     * The three "Wi-Fi Direct cannot work" sentences, localized HERE — the layer with a Context — exactly
+     * like `ovk_conn_failed_rescan` and friends, so the factory package stays free of Android resources.
+     *
+     * The Wi-Fi-off line is per-connector on purpose: the BLE connector needs the radio because the PHONE
+     * creates the network ("this bike connects to a network your phone creates"), while the P2P connector
+     * joins the dash's — telling a 450NK owner their phone creates the network would be a small lie that
+     * costs them a real minute of confusion. The other two sentences are the same either way.
+     */
+    private fun wifiDirectMessages(ctx: Context, mode: TransportKind) = WifiDirectMessages(
+        wifiOff = ctx.getString(
+            if (mode == TransportKind.PHONE_HOTSPOT) R.string.ovk_conn_wifi_off_phone_hosts
+            else R.string.ovk_conn_wifi_off_direct,
+        ),
+        nearbyPermission = ctx.getString(R.string.ovk_conn_nearby_denied),
+        unsupported = ctx.getString(R.string.ovk_conn_wifi_direct_unsupported),
+    )
 
     /**
      * Retry caps by transport — **FINITE for every kind**, returning `(maxReconnectAttempts, flapMaxFailures)`.
@@ -131,7 +160,7 @@ object BikeConnectionFactory {
             ?: ConnectionSpec.detectedAtPairing(qr, pref, remembered)
         val (maxReconnects, flapMax) = retryCapsFor(spec.mode)
         return DefaultBikeConnection(
-            transport = selectTransport(spec),
+            transport = selectTransport(spec, wifiDirectMessages(ctx, spec.mode)),
             links = listOf(EasyConnBikeLink(), YunmoBikeLink()),
             spec = spec,
             io = io,

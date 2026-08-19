@@ -37,6 +37,30 @@ import kotlinx.coroutines.flow.StateFlow
  */
 enum class TransportKind { SOFT_AP, P2P, PHONE_HOTSPOT, TETHER }
 
+/**
+ * A connect failure that already knows what to TELL THE RIDER — a precondition the app can name (phone
+ * Wi-Fi off, the Android 13+ nearby-devices grant missing, a phone with no Wi-Fi Direct at all), not the
+ * usual "it didn't work".
+ *
+ * `DefaultBikeConnection` turns an initial-connect failure into the injected "scan the QR again to update
+ * the garage" text, because normally the connector really is the suspect. For these three it is NOT: the
+ * garage entry is right and re-scanning fixes nothing, so [riderMessage] takes precedence there — the one
+ * place the technical cause is allowed to choose the rider's words.
+ */
+interface RiderFacingFailure {
+    /** Localized, jargon-free, and says what to DO. Null falls back to the generic text (unit tests). */
+    val riderMessage: String?
+}
+
+/**
+ * A transport that cannot even start, for a named reason ([RiderFacingFailure]). [message] stays technical
+ * (it is what the log prints); [riderMessage] is what the cockpit gauge shows.
+ */
+class TransportUnavailableException(
+    override val riderMessage: String?,
+    technical: String,
+) : IllegalStateException(technical), RiderFacingFailure
+
 /** A step of [ConnState.Connecting], surfaced to the UI as coarse progress. */
 enum class Phase { Discovering, JoinTransport, Handshake, Starting }
 

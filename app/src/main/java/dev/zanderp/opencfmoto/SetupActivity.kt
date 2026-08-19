@@ -4,6 +4,7 @@
 package dev.zanderp.opencfmoto
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.net.Uri
 import android.os.Bundle
@@ -532,7 +533,12 @@ class SetupActivity : AppCompatActivity() {
     private fun tick(ok: Boolean): String = if (ok) "\u2713" else "\u2022"
 
     private fun requestMissingPermissions() {
-        val missing = SetupHelper.missingPermissions(this)
+        // Ask for the checklist AND the Android 13+ nearby-devices grant Wi-Fi Direct needs, in one batch —
+        // but keep the step's tick on the checklist alone (SetupHelper.wifiDirectPermissions), so a rider
+        // with only SoftAP bikes is never left with a step that can't go green.
+        val missing = SetupHelper.onboardingPermissions().filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
         if (missing.isEmpty()) { refresh(); return }
         ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQ_PERMS)
     }

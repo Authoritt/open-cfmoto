@@ -81,5 +81,22 @@ enum class ConnectorChoice {
             TransportKind.PHONE_HOTSPOT -> BLE
             TransportKind.TETHER -> HOTSPOT
         }
+
+        /**
+         * The transport a pinned [choice] forces, or null for [AUTO] (which forces nothing — detection
+         * decides). The SINGLE definition of this direction: `BikeMemory.setConnectorChoice` writes it into
+         * the bike's spec and `BikeMemory.effectiveMode` reads it back, and the two used to be one `when`
+         * with no counterpart, which is how a mapping quietly grows a second, different copy.
+         *
+         * Mind the crossing, spelled out in [forTransport]: rider-facing [BLE] is [TransportKind.PHONE_HOTSPOT]
+         * and rider-facing [HOTSPOT] is [TransportKind.TETHER].
+         */
+        fun transportFor(choice: ConnectorChoice): TransportKind? = when (choice) {
+            SOFT_AP -> TransportKind.SOFT_AP
+            P2P -> TransportKind.P2P
+            BLE -> TransportKind.PHONE_HOTSPOT
+            HOTSPOT -> TransportKind.TETHER
+            AUTO -> null
+        }
     }
 }

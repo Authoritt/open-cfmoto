@@ -46,10 +46,12 @@ import dev.zanderp.opencfmoto.VideoPrefs
 import dev.zanderp.opencfmoto.WifiGate
 import dev.zanderp.opencfmoto.WifiTransport
 import dev.zanderp.opencfmoto.ConnectionState
+import dev.zanderp.opencfmoto.connection.factory.AutoConnectGate
 import dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory
 import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.autoConnectGateFor
 import dev.zanderp.opencfmoto.connection.factory.isBleHotspotQr
 import dev.zanderp.opencfmoto.connection.factory.resolveWifiTransport
 
@@ -661,6 +663,60 @@ object CfmotoConnect {
         return true
     }
 
+    /**
+     * Has this app session already spent the one automatic attempt the phone-hosted connectors get
+     * ([AutoConnectGate.ONCE_PER_SESSION])? Process-scoped, exactly like `MainActivity.autoConnectStarted`.
+     */
+    @Volatile private var phoneHostedAutoTried = false
+
+    /**
+     * "Is the bike near enough to try?" — asked the way THIS bike's connector can actually answer it
+     * ([autoConnectGateFor]).
+     *
+     * The bug: auto-connect asked one question for every bike, "is the BIKE's SSID in a Wi-Fi scan?". For the
+     * two phone-hosts-the-network connectors the phone creates the network, so there is no bike SSID to find
+     * and the gate can NEVER pass — those bikes never auto-connected, and the log said something that reads
+     * like a fact about the bike but is a fact about the question (real Rieju log:
+     * `[auto-fg] 'Phone hotspot (16:6b:50)' not in range — will retry on resume`).
+     *
+     * SoftAP/P2P keep the scan gate untouched: there the dash really does host the network, so its SSID is a
+     * true presence signal and dropping it would make a parked phone attempt all day.
+     */
+    private fun nearGateAllows(activity: Activity, saved: QrData, gate: AutoConnectGate, tag: String): Boolean {
+        val name = BikeMemory.lastBikeName(activity)
+        return when (gate) {
+            AutoConnectGate.BIKE_SSID_IN_RANGE -> {
+                if (BikeWifi.isSsidInRange(activity, saved.ssid) == false) {
+                    LogBus.log("[$tag] '$name' not in range — will retry on resume")
+                    false
+                } else {
+                    true
+                }
+            }
+            AutoConnectGate.ONCE_PER_SESSION -> {
+                // Nothing to scan for (the phone hosts the network), so the budget IS the gate: one attempt
+                // per app session. Without it this fires on every ON_RESUME of the dashboard — a Wi-Fi Direct
+                // group, a ~15 s wait and a terminal error every time the rider comes back to that screen.
+                // Read-only here; the budget is SPENT only once the attempt is really committed, so a
+                // debounced no-op cannot burn a rider's single automatic try.
+                if (phoneHostedAutoTried) {
+                    LogBus.log("[$tag] '$name' already had its one automatic attempt this session — tap Connect")
+                    false
+                } else {
+                    LogBus.log("[$tag] '$name' hosts its network on the PHONE (nothing to scan for) — one automatic attempt")
+                    true
+                }
+            }
+            AutoConnectGate.RIDER_ONLY -> {
+                // The rider has to switch the hotspot on and answer the assist dialog first; an automatic
+                // attempt could only pop a modal nobody asked for. (It never auto-connected before either —
+                // the range gate just blamed the bike for it.)
+                LogBus.log("[$tag] '$name' needs you to turn the phone hotspot on — tap Connect")
+                false
+            }
+        }
+    }
+
     /** Single-flight claim: true only for the first caller inside the debounce window. */
     private fun claimAutoConnect(): Boolean {
         val now = System.currentTimeMillis()
@@ -722,11 +778,11 @@ object CfmotoConnect {
         if (!WifiGate.isWifiEnabled(activity)) {
             LogBus.log("[auto-fg] phone Wi-Fi is off — tap Connect to turn it on"); return false
         }
-        if (BikeWifi.isSsidInRange(activity, saved.ssid) == false) {
-            LogBus.log("[auto-fg] '${BikeMemory.lastBikeName(activity)}' not in range — will retry on resume")
-            return false
-        }
+        val gate = autoConnectGateFor(BikeMemory.effectiveMode(activity, saved))
+        if (!nearGateAllows(activity, saved, gate, "auto-fg")) return false
         if (!claimAutoConnect()) { LogBus.log("[auto-fg] another auto-connect just fired — skip"); return false }
+        // Committed — now the phone-hosted connectors' one automatic attempt is spent.
+        if (gate == AutoConnectGate.ONCE_PER_SESSION) phoneHostedAutoTried = true
         if (!GpxSession.active) GpxSession.prepareFreeRide()
         LogBus.log("→ [auto-fg] auto-connecting '${BikeMemory.lastBikeName(activity)}' (CFMOTO map)")
         startCfmotoMap(activity, preferFactory = true)

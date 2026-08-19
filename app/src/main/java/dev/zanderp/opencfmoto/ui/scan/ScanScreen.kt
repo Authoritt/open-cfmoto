@@ -73,12 +73,15 @@ import com.google.mlkit.vision.common.InputImage
 import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.GpxSession
+import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.ManualWifiPairing
+import dev.zanderp.opencfmoto.NearbyDevices
 import dev.zanderp.opencfmoto.QrData
 import dev.zanderp.opencfmoto.connection.CfmotoConnect
 import dev.zanderp.opencfmoto.connection.factory.ConnState
 import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.usesWifiDirect
 import dev.zanderp.opencfmoto.ui.Routes
 import dev.zanderp.opencfmoto.ui.components.GhostButton
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
@@ -185,6 +188,27 @@ fun ScanScreen(nav: NavController) {
             delay(CONNECT_START_TIMEOUT_MS)
             if (awaitingStart) attempt = null
         }
+    }
+
+    // The Android 13+ "nearby devices" grant, asked HERE and nowhere else. Wi-Fi Direct is refused without
+    // it — WifiP2pManager answers the generic ERROR (0) instantly, which is exactly the failure the Rieju
+    // owner's log showed — and the permission had never been requested at runtime at all, only declared.
+    //
+    // Why at pairing: this screen is where the connector is DECIDED and PROVEN, the rider is deliberately in
+    // a pairing flow, and an Activity is guaranteed. Mid-connect (on the road, or at a headless auto-connect
+    // with no UI) is the worst possible moment, so the transports only CHECK it there and say what to do.
+    // Only for the connectors that actually create/join a Wi-Fi Direct group (usesWifiDirect): a rider whose
+    // bike is SoftAP is never asked for something they will not use.
+    val nearbyLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        LogBus.log("[scan] nearby-devices permission ${if (ok) "granted" else "denied"}")
+    }
+    LaunchedEffect(pairedQr, connectorRefresh) {
+        val qr = pairedQr ?: return@LaunchedEffect
+        val mode = BikeMemory.effectiveMode(ctx, qr)
+        if (!usesWifiDirect(mode) || NearbyDevices.granted(ctx)) return@LaunchedEffect
+        LogBus.log("[scan] '$mode' needs Wi-Fi Direct — asking for the nearby-devices permission before Connect")
+        NearbyDevices.markAsked(ctx)
+        nearbyLauncher.launch(NearbyDevices.PERMISSION)
     }
 
     // Run the connect. Deliberately NOT a new connection path: prepareFreeRide + startCfmotoMap with

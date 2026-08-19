@@ -143,6 +143,8 @@ private fun retryOrFail(reason: String, recover: Boolean): ConnState =
  * @param initialFailureReason rider-facing text for the INITIAL-connect-failure class ("…scan the QR again
  *   to update the garage") — localized by [BikeConnectionFactory.create], which is the only place with a
  *   Context, so this class stays free of Android resources. Null keeps the technical reason (tests).
+ *   Overridden for the failures that name themselves ([RiderFacingFailure]): a phone with its Wi-Fi off is
+ *   not fixed by re-scanning the QR, so that message wins.
  * @param lostLinkReason rider-facing text for the OTHER terminal case: a link that WAS alive and could not be
  *   recovered ("…toca Conectar para reintentar"). Same injection, same reason — this one is read ON THE BIKE,
  *   mid-ride, so it must never be an internal English string. The technical detail (attempt count / flap
@@ -275,9 +277,14 @@ class DefaultBikeConnection(
         var windowFailures = 0 // failures within the current flap window (NOT reset by a brief success)
         var everConnected = false // has this connect() call ever reached Connected? -> which failure class
         var fatal: ConnState? = null
+        var riderFacing: String? = null // set by a RiderFacingFailure thrown out of open()/establish()
         try {
             dispatch(ConnEvent.StartRequested) // Idle -> Connecting(Discovering)
             while (true) {
+                // A named precondition failure (phone Wi-Fi off, nearby-devices grant missing, no Wi-Fi
+                // Direct) brings its OWN rider-facing text; cleared every pass so a later failure of another
+                // kind cannot inherit the words of this one.
+                riderFacing = null
                 val problem: ConnEvent = try {
                     ensureConnected() // opens transport if needed, then establishes a link -> Connected
                     everConnected = true
@@ -286,6 +293,7 @@ class DefaultBikeConnection(
                 } catch (c: CancellationException) {
                     throw c // disconnect() cancelled us — unwind into the finally
                 } catch (t: Throwable) {
+                    riderFacing = (t as? RiderFacingFailure)?.riderMessage
                     ConnEvent.LinkDropped(t.message ?: "connect failed") // open/establish threw -> treat as drop
                 }
 
@@ -294,13 +302,19 @@ class DefaultBikeConnection(
                 // link that was alive and got lost falls through to the reconnect machinery below.
                 val decided = reduce(_state.value, problem, everConnected)
                 if (decided is ConnState.Error) {
-                    fatal = if (!everConnected && initialFailureReason != null) {
+                    // A failure that named itself (RiderFacingFailure) OWNS the rider's words: "scan the QR
+                    // again" is wrong advice when the garage entry is fine and the phone's Wi-Fi is simply
+                    // off — or the nearby-devices grant is missing. Everything else keeps the generic text.
+                    val named = if (everConnected) null else riderFacing
+                    val rescue = if (everConnected) null else (named ?: initialFailureReason)
+                    fatal = if (rescue != null) {
                         io.log(
                             "BikeConnection",
                             "connect failed before ever connecting (${decided.reason}) — NOT retrying: " +
-                                "the connector is a Garage setting, the rider re-scans to fix it",
+                                if (named != null) "the cause is named, telling the rider how to fix it"
+                                else "the connector is a Garage setting, the rider re-scans to fix it",
                         )
-                        decided.copy(reason = initialFailureReason)
+                        decided.copy(reason = rescue)
                     } else {
                         io.log("BikeConnection", "unrecoverable: ${decided.reason}")
                         decided

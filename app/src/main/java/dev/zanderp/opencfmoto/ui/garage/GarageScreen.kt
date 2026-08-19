@@ -7,6 +7,8 @@ package dev.zanderp.opencfmoto.ui.garage
 
 import android.content.Context
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -44,10 +46,13 @@ import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.BikeMemory
+import dev.zanderp.opencfmoto.LogBus
+import dev.zanderp.opencfmoto.NearbyDevices
 import dev.zanderp.opencfmoto.QrScanActivity
 import dev.zanderp.opencfmoto.SavedBike
 import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.usesWifiDirect
 import dev.zanderp.opencfmoto.settings.MapProvider
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.connection.ConnectorChoiceDialog
@@ -68,6 +73,11 @@ fun GarageScreen(nav: NavController) {
     var providerFor by remember { mutableStateOf<SavedBike?>(null) }
     var connectorFor by remember { mutableStateOf<SavedBike?>(null) }
     var removeFor by remember { mutableStateOf<SavedBike?>(null) }
+    // The Android 13+ nearby-devices grant, asked when a rider PINS a Wi-Fi Direct connector here (Scan asks
+    // at pairing). Declared at composable scope because a launcher must be; it only fires from that pick.
+    val nearbyLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        LogBus.log("[garage] nearby-devices permission ${if (ok) "granted" else "denied"}")
+    }
 
     Column(
         Modifier.fillMaxSize().background(c.ground).verticalScroll(rememberScrollState()).padding(16.dp),
@@ -155,7 +165,18 @@ fun GarageScreen(nav: NavController) {
             current = current,
             detected = detected,
             onPick = { picked ->
-                qr?.let { BikeMemory.setConnectorChoice(ctx, it, picked) }
+                qr?.let {
+                    BikeMemory.setConnectorChoice(ctx, it, picked)
+                    // Pinning BLE or P2P here is the other moment a bike acquires a Wi-Fi Direct connector
+                    // (Scan is the first). Ask for the Android 13+ nearby-devices grant NOW — deliberate,
+                    // with the rider in a settings dialog — so the next Connect can work; without it every
+                    // Wi-Fi Direct call is rejected instantly with the framework's generic ERROR.
+                    if (usesWifiDirect(BikeMemory.effectiveMode(ctx, it)) && !NearbyDevices.granted(ctx)) {
+                        LogBus.log("[garage] '$picked' needs Wi-Fi Direct — asking for the nearby-devices permission")
+                        NearbyDevices.markAsked(ctx)
+                        nearbyLauncher.launch(NearbyDevices.PERMISSION)
+                    }
+                }
                 refresh++
                 connectorFor = null
             },
