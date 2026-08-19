@@ -33,10 +33,21 @@ class ConnStateReducerTest {
     }
 
     @Test
-    fun `transport lost re-enters at JoinTransport`() {
+    fun `transport lost surfaces Retrying during backoff (F5)`() {
+        // F5: transport loss backs off as Retrying (with nextInMs), not a nextInMs-less Connecting, so the
+        // UI shows a uniform "reconnecting in N" for both drop kinds. Re-opening the transport (re-entering
+        // Phase.JoinTransport) happens in the driver AFTER the backoff, not in this pure reducer.
         val s = reduce(ConnState.Connected(ep), ConnEvent.TransportLost("wifi gone"))
-        assertTrue("transport loss must go back to Connecting", s is ConnState.Connecting)
-        assertEquals(Phase.JoinTransport, (s as ConnState.Connecting).phase)
+        assertTrue("transport loss must back off as Retrying, like a link drop", s is ConnState.Retrying)
+        assertEquals("wifi gone", (s as ConnState.Retrying).reason)
+    }
+
+    @Test
+    fun `both drop kinds reduce to the same Retrying shape (F5)`() {
+        val fromLink = reduce(ConnState.Connected(ep), ConnEvent.LinkDropped("pxc"))
+        val fromTransport = reduce(ConnState.Connected(ep), ConnEvent.TransportLost("wifi"))
+        assertTrue(fromLink is ConnState.Retrying)
+        assertTrue(fromTransport is ConnState.Retrying)
     }
 
     @Test

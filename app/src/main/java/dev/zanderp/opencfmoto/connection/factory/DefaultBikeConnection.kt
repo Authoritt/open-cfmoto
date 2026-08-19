@@ -43,8 +43,14 @@ internal const val RETRY_BASE_MS = 1_000L
 /** Upper bound on the backoff so a long outage still retries about twice a minute. */
 internal const val RETRY_CAP_MS = 30_000L
 
-/** Consecutive failures before a recoverable retry is declared fatal ([ConnState.Error]). */
+/** Consecutive failures (no clean Connected in between) before a retry is declared fatal ([ConnState.Error]). */
 internal const val MAX_ATTEMPTS = 6
+
+/** Flap window: total drops within this span (even with brief successes between) escalate to fatal (F6). */
+internal const val FLAP_WINDOW_NS = 60_000_000_000L // 60 s
+
+/** Total drops within [FLAP_WINDOW_NS] before a pathologically flapping link is declared fatal (F6). */
+internal const val FLAP_MAX_FAILURES = 12
 
 /** Capped exponential backoff: base * 2^(attempt-1), clamped to [RETRY_CAP_MS]. `attempt` starts at 1. */
 internal fun backoffMs(attempt: Int): Long =
@@ -55,11 +61,11 @@ internal fun backoffMs(attempt: Int): Long =
  * [ConnState] and an incoming [ConnEvent], compute the next state — no I/O, no time, no mutation — so the
  * whole reconnect policy is unit-testable without Android or a bike.
  *
- * The recovery rule that matters (the shipped `recoverSocketLinkOnLiveNetwork` fix, formalized):
- *  - [ConnEvent.LinkDropped] (transport still up) -> [ConnState.Retrying]; the driver re-`establish()`s the
- *    LINK only and, on success, feeds [ConnEvent.LinkEstablished] -> back to [ConnState.Connected].
- *  - [ConnEvent.TransportLost] -> [ConnState.Connecting] at [Phase.JoinTransport]; the driver re-`open()`s
- *    the transport (then the link) with backoff.
+ * Both drop kinds go to [ConnState.Retrying] so the UI shows a uniform "reconnecting in N ms" during
+ * backoff (F5). They differ only in what the *driver* re-runs afterward: a [ConnEvent.LinkDropped]
+ * re-`establish()`s the LINK on the still-live transport, whereas a [ConnEvent.TransportLost] re-`open()`s
+ * the transport first (the driver re-enters [Phase.JoinTransport] via `ensureConnected`, since the reducer
+ * cannot store the endpoint it would need to rebuild that phase).
  *
  * `cur` is deliberately not consulted: the driver only emits events valid for the current state, so each
  * event fully determines the next state. Keeping it event-dominant is what makes the table trivial to test.
@@ -69,7 +75,7 @@ internal fun reduce(cur: ConnState, ev: ConnEvent): ConnState = when (ev) {
     is ConnEvent.TransportOpened -> ConnState.Connecting(Phase.Handshake)
     is ConnEvent.LinkEstablished -> ConnState.Connected(ev.endpoint)
     is ConnEvent.LinkDropped -> ConnState.Retrying(ev.reason, RETRY_BASE_MS)
-    is ConnEvent.TransportLost -> ConnState.Connecting(Phase.JoinTransport, ev.reason)
+    is ConnEvent.TransportLost -> ConnState.Retrying(ev.reason, RETRY_BASE_MS)
     is ConnEvent.Failed ->
         if (ev.recoverable) ConnState.Retrying(ev.reason, RETRY_BASE_MS)
         else ConnState.Error(ev.reason, recoverable = false)
@@ -78,13 +84,25 @@ internal fun reduce(cur: ConnState, ev: ConnEvent): ConnState = when (ev) {
 
 /**
  * Owns one bike connection's lifecycle (design doc section 6): a coroutine walks Layer 1 (`transport.open`)
- * then Layer 2 (`links` in order until one `establish`es), publishing coarse progress on [state]; a
- * supervising loop consumes drop/loss signals and applies [reduce]'s recovery with capped exponential
- * backoff.
+ * then Layer 2 (`links` in order until one `establish`es), publishing coarse progress on [state]; the same
+ * coroutine's supervising loop consumes drop/loss signals and applies [reduce]'s recovery with capped
+ * exponential backoff.
+ *
+ * Concurrency model (adversarial-review fixes F1-F4): **the coroutine owns the entire lifecycle.** All
+ * teardown and terminal-state emission live in one `finally` inside the driver, so they run exactly once on
+ * normal completion, on cancellation (`disconnect`), and on the fatal-[ConnState.Error] return — never on a
+ * caller thread. [disconnect] therefore only cancels the job; it touches no shared state. The mutable
+ * fields [session]/[endpoint] are confined to the driver coroutine (kotlinx dispatch gives the needed
+ * happens-before across suspensions, so they need no locking); only [runJob], read from caller threads, is
+ * `@Volatile`, and [connect]/[disconnect] serialize on [lifecycleLock] with a cancel-then-join handoff so a
+ * new run cannot start while the previous driver is still unwinding (F3).
  *
  * Constructed by [BikeConnectionFactory.create]. The transport/link wrappers are the Task-6 shells for now
  * (their `open`/`establish` throw), so the happy path is not yet live on a bike — but the state machine and
  * the reducer it drives are complete and tested here.
+ *
+ * @param maxAttempts consecutive-failure cap before fatal (injected so tests can force a fast fatal).
+ * @param flapWindowNs / [flapMaxFailures] the F6 flap cap (injected for tests).
  */
 class DefaultBikeConnection(
     private val transport: BikeTransport,
@@ -92,6 +110,9 @@ class DefaultBikeConnection(
     private val spec: ConnectionSpec,
     private val io: PlatformIO,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val maxAttempts: Int = MAX_ATTEMPTS,
+    private val flapWindowNs: Long = FLAP_WINDOW_NS,
+    private val flapMaxFailures: Int = FLAP_MAX_FAILURES,
 ) : BikeConnection {
 
     private val _state = MutableStateFlow<ConnState>(ConnState.Idle)
@@ -104,59 +125,95 @@ class DefaultBikeConnection(
      */
     private val events = Channel<ConnEvent>(Channel.UNLIMITED)
 
+    /** Serializes [connect]/[disconnect] so the driver handoff (cancel old, start new) is atomic. */
+    private val lifecycleLock = Any()
+
+    @Volatile
     private var runJob: Job? = null
+
+    // Confined to the driver coroutine (see class KDoc): never touched from a caller thread.
     private var session: LinkSession? = null
 
     /** Last good endpoint. Non-null means the transport is up, so a link drop re-establishes Layer 2 only. */
     private var endpoint: BikeEndpoint? = null
 
     override fun connect() {
-        if (runJob?.isActive == true) return
         // section-6 auto-connect gate: the phone-hotspot path needs a foreground Activity; headless defers.
         if (spec.mode == TransportKind.PHONE_HOTSPOT && io.activityOrNull() == null) {
             _state.value = ConnState.Error("needs foreground", recoverable = false)
             return
         }
-        runJob = scope.launch { supervise() }
+        synchronized(lifecycleLock) {
+            val previous = runJob
+            previous?.cancel() // stop any prior driver eagerly...
+            runJob = scope.launch {
+                previous?.join() // ...and wait for its finally (teardown + terminal state) before starting.
+                supervise()
+            }
+        }
     }
 
     override fun disconnect() {
-        runJob?.cancel()
-        runJob = null
-        teardown()
-        _state.value = reduce(_state.value, ConnEvent.Disconnected) // -> Idle
+        // Only cancel — the driver's finally performs teardown and drives the state to Idle (F1).
+        synchronized(lifecycleLock) { runJob?.cancel() }
     }
 
-    /** The lifecycle coroutine: (re)connect, then block on the next drop/loss and recover. */
+    /**
+     * The lifecycle coroutine. One `try`/`finally` owns cleanup: whether the loop exits by cancellation
+     * (disconnect) or by the fatal-error `return`, the `finally` tears everything down once and publishes the
+     * terminal state ([ConnState.Idle] for a disconnect via the pure `Disconnected` transition, or the
+     * captured [ConnState.Error]). Teardown is all non-suspending, so it completes even while cancelling.
+     */
     private suspend fun supervise() {
-        var attempt = 0
-        dispatch(ConnEvent.StartRequested) // Idle -> Connecting(Discovering)
-        while (true) {
-            try {
-                ensureConnected() // opens transport if needed, then establishes a link
-                attempt = 0
-                when (val ev = events.receive()) { // suspends until a watchdog reports trouble
-                    is ConnEvent.LinkDropped -> {
-                        closeSession() // drop the link; KEEP the transport (endpoint stays non-null)
-                        retryThen(ev, ++attempt)
-                    }
+        var attempt = 0 // consecutive failures -> backoff size; reset on a clean Connected
+        var windowStartNs = System.nanoTime()
+        var windowFailures = 0 // failures within the current flap window (NOT reset by a brief success)
+        var fatal: ConnState? = null
+        try {
+            dispatch(ConnEvent.StartRequested) // Idle -> Connecting(Discovering)
+            while (true) {
+                val problem: ConnEvent = try {
+                    ensureConnected() // opens transport if needed, then establishes a link -> Connected
+                    attempt = 0
+                    events.receive() // suspends until a watchdog reports trouble
+                } catch (c: CancellationException) {
+                    throw c // disconnect() cancelled us — unwind into the finally
+                } catch (t: Throwable) {
+                    ConnEvent.LinkDropped(t.message ?: "connect failed") // open/establish threw -> treat as drop
+                }
+
+                when (problem) {
+                    is ConnEvent.LinkDropped -> closeSession() // keep the transport (endpoint stays non-null)
                     is ConnEvent.TransportLost -> {
                         closeSession()
                         closeTransport() // endpoint -> null, so the next pass re-opens the transport first
-                        retryThen(ev, ++attempt)
                     }
-                    else -> Unit // progress events are driven inline, not fed through the channel
+                    else -> continue // progress events are driven inline, not fed through the channel
                 }
-            } catch (c: CancellationException) {
-                throw c // disconnect() cancelled us — let it propagate
-            } catch (t: Throwable) {
-                closeSession() // establish/open failed; keep the transport if it was already up
-                if (++attempt >= MAX_ATTEMPTS) {
-                    _state.value = ConnState.Error(t.message ?: "connection failed", recoverable = false)
-                    return
+
+                attempt++
+                val now = System.nanoTime()
+                if (now - windowStartNs > flapWindowNs) {
+                    windowStartNs = now
+                    windowFailures = 0
                 }
-                retryThen(ConnEvent.LinkDropped(t.message ?: "retrying"), attempt)
+                windowFailures++
+
+                val exhausted = attempt >= maxAttempts // cannot connect at all
+                val unstable = windowFailures >= flapMaxFailures // connects but flaps (F6)
+                if (exhausted || unstable) {
+                    val why =
+                        if (unstable) "connection unstable ($windowFailures drops within ${flapWindowNs / 1_000_000_000}s)"
+                        else "connection failed after $attempt attempts"
+                    fatal = ConnState.Error(why, recoverable = false)
+                    return // -> finally: teardown + publish Error
+                }
+
+                retryThen(problem, attempt) // -> Retrying(reason, backoff); wait
             }
+        } finally {
+            teardownInternal()
+            _state.value = fatal ?: reduce(_state.value, ConnEvent.Disconnected) // Error, else Idle
         }
     }
 
@@ -201,6 +258,7 @@ class DefaultBikeConnection(
     }
 
     // Task 6 watchdogs call these to drive recovery through the supervising loop without re-entering it.
+    // Thread-safe: they only enqueue on the channel; they never touch session/endpoint.
     internal fun signalLinkDropped(reason: String) {
         events.trySend(ConnEvent.LinkDropped(reason))
     }
@@ -209,7 +267,8 @@ class DefaultBikeConnection(
         events.trySend(ConnEvent.TransportLost(reason))
     }
 
-    private fun teardown() {
+    /** All resource cleanup, driver-coroutine only (called solely from [supervise]'s `finally`). */
+    private fun teardownInternal() {
         closeSession()
         runCatching { links.forEach { it.stop() } }
         closeTransport()
