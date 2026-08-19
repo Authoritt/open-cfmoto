@@ -64,3 +64,4 @@ agent-tools/
 
 # live QA screenshots (local only)
 *-live.png
+.superpowers/
