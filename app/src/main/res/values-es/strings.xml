@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Draft + terminology pass — improve via PR: docs/TRANSLATIONS.md -->
 <resources>
-    <string name="app_name">Open CfMoto</string>
+    <string name="app_name">Cockpit</string>
+    <string name="app_name_classic">Cockpit clásico</string>
     <string name="about_copyright">© 2026 Alexandru</string>
     <string name="about_copyright_body">Mantenido por Alexandru (zanderp). Software libre bajo la GNU AGPL v3 o posterior: consulta LICENSE y NOTICE en el repositorio para ver el texto completo de derechos de autor y atribución.</string>
     <string name="about_license_body">Puedes usar, estudiar, compartir y modificar esta aplicación según la AGPL. Si redistribuyes una versión modificada (incluso como servicio de red), debes ofrecer el código fuente correspondiente completo bajo la misma licencia.</string>

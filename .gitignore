@@ -65,3 +65,10 @@ agent-tools/
 # live QA screenshots (local only)
 *-live.png
 .superpowers/
+
+# Signing material never belongs in this (public) repo. Keep your keystore outside it
+# and point local.properties at it (see the signing block in app/build.gradle.kts).
+*.jks
+*.keystore
+keystore.properties
+signing.properties
