@@ -55,13 +55,19 @@ class EasyConnBikeLink(
         val prober = this.prober ?: EasyConnProber(ctx.applicationContext, logCb).also { this.prober = it }
 
         when (endpoint.kind) {
-            // P2P and PhoneHotspot: no bindable Network — hand the prober our bind IP + the peer/host address
-            // so it opens its :10920-10922 servers on the right interface (CfmotoConnect.kt:431). On the
-            // phone-hotspot path the phone is the group owner, so bindIp == host == 192.168.49.1: the prober
-            // (already phone-as-server — it listens and the bike dials back, EasyConnProber.kt:25) binds its
-            // servers to our GO address. Whether the Rieju dash then auto-dials those listeners or needs an
-            // active probe to its DHCP-assigned IP is the owner-test gap (design §11, §8 step 4).
-            TransportKind.P2P, TransportKind.PHONE_HOTSPOT -> prober.start(
+            // P2P, PhoneHotspot and Tether: no bindable Network — hand the prober our bind IP + the peer/host
+            // address so it opens its :10920-10922 servers on the right interface (CfmotoConnect.kt:431). On
+            // the phone-hotspot path the phone is the group owner, so bindIp == host == 192.168.49.1: the
+            // prober (already phone-as-server — it listens and the bike dials back, EasyConnProber.kt:25)
+            // binds its servers to our GO address. Whether the Rieju dash then auto-dials those listeners or
+            // needs an active probe to its DHCP-assigned IP is the owner-test gap (design §11, §8 step 4).
+            //
+            // TETHER lands here for the same reason and with the SAME arguments the classic tether scan uses
+            // (CfmotoConnect.startPhoneHotspotScan): `network = null, gatewayOverride = peer (the dash's DHCP
+            // address on the tether subnet), bindIpOverride = subnet.localAddress (the phone's tether-iface
+            // address)` — TetherTransport puts exactly those two into `endpoint.host` / `endpoint.bindIp`,
+            // so this call is argument-for-argument the proven one.
+            TransportKind.P2P, TransportKind.PHONE_HOTSPOT, TransportKind.TETHER -> prober.start(
                 network = null,
                 gatewayOverride = endpoint.host,
                 bindIpOverride = endpoint.bindIp,

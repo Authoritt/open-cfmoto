@@ -8,12 +8,11 @@ package dev.zanderp.opencfmoto.connection.factory
  * remembered by `BikeMemory.connectorChoice`/`setConnectorChoice`. [AUTO] is the default and the only
  * value existing bikes ever hold, so nothing changes unless the rider deliberately pins a mechanism.
  *
- * The three FACTORY connectors ([SOFT_AP]/[P2P]/[RIEJU_BLE]) map onto a [TransportKind] that
+ * All four connectors ([SOFT_AP]/[P2P]/[RIEJU_BLE]/[TETHER]) map onto a [TransportKind] that
  * `setConnectorChoice` writes into the bike's stored [ConnectionSpec.mode] — that is what
  * `BikeConnectionFactory.selectTransport` reads, so an explicit choice forces the transport without
- * re-running detection. [TETHER] routes the CLASSIC Android-tether path (`joinPhoneHotspot`) instead and
- * therefore does NOT touch `spec.mode`. [AUTO] clears any prior override (resets `spec.mode` back to the
- * QR-derived guess) so the connect path auto-detects exactly as a fresh scan would.
+ * re-running detection. [AUTO] clears any prior override (resets `spec.mode` back to the QR-derived guess)
+ * so the connect path auto-detects exactly as a fresh scan would.
  */
 enum class ConnectorChoice {
     /** Let the app detect the mechanism from the QR (default; existing bikes behave as today). */
@@ -29,6 +28,7 @@ enum class ConnectorChoice {
      *  fallback). Overrides even a QR whose `modelid` isn't in `BLE_HOTSPOT_MODEL_IDS`. */
     RIEJU_BLE,
 
-    /** Force the classic manual phone-hotspot tether (`CfmotoConnect.joinPhoneHotspot`); NOT the factory. */
+    /** Force the rider's-Android-hotspot tether (Zontes / opaque `CARBIT`, no BLE) → factory
+     *  `TetherTransport`. Overrides even a QR the app would have detected as SoftAP/P2P. */
     TETHER,
 }

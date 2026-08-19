@@ -25,8 +25,17 @@ import kotlinx.coroutines.flow.StateFlow
  * `ConnectionState.kt`'s richer `Phase` enum) — different package, no collision, wrap-not-rewrite.
  */
 
-/** How the phone reaches the bike's control channel. */
-enum class TransportKind { SOFT_AP, P2P, PHONE_HOTSPOT }
+/**
+ * How the phone reaches the bike's control channel.
+ *
+ * [PHONE_HOTSPOT] and [TETHER] are the two *phone-hosts-the-network* mechanisms and must not be confused:
+ * [PHONE_HOTSPOT] is the Rieju connector (the app creates a Wi-Fi Direct group and pushes the creds to the
+ * dash over BLE B360 — no rider typing), while [TETHER] is the Zontes / opaque-`CARBIT` connector (the RIDER
+ * turns the Android hotspot on with the SSID/password printed on the dash; no BLE handshake at all). The
+ * single predicate that splits them for a given QR is
+ * [isBleHotspotQr] (`ConnectionSpec.kt`).
+ */
+enum class TransportKind { SOFT_AP, P2P, PHONE_HOTSPOT, TETHER }
 
 /** A step of [ConnState.Connecting], surfaced to the UI as coarse progress. */
 enum class Phase { Discovering, JoinTransport, Handshake, Starting }

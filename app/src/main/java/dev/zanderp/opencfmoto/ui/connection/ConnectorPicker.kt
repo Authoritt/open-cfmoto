@@ -51,6 +51,7 @@ fun detectedTransportToken(mode: TransportKind): String = when (mode) {
     TransportKind.SOFT_AP -> "SoftAP"
     TransportKind.P2P -> "P2P"
     TransportKind.PHONE_HOTSPOT -> "Hotspot"
+    TransportKind.TETHER -> "Tether"
 }
 
 /**

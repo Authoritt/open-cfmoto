@@ -1,6 +1,10 @@
 package dev.zanderp.opencfmoto.connection
 
 import dev.zanderp.opencfmoto.QrData
+import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
+import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.fromQr
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -65,5 +69,33 @@ class CfmotoConnectRoutingTest {
 
     @Test fun `P2P DIRECT QR is not a BLE hotspot`() {
         assertFalse(CfmotoConnect.isBleHotspot(qr(action = 8, ssid = "DIRECT-ab", modelId = RIEJU)))
+    }
+
+    // --- ONE DEFINITION: the routing predicate and the persisted spec.mode can never disagree ---
+    // `CfmotoConnect.isBleHotspot` and `ConnectionSpec.fromQr` both call `isBleHotspotQr`. These pin the two
+    // together: whichever connector joinWifi picks for a phone-hotspot QR, the stored mode picks the same one.
+
+    @Test fun `Rieju QR — isBleHotspot true AND fromQr PHONE_HOTSPOT`() {
+        val q = qr(action = 128, modelId = RIEJU)
+        assertTrue(CfmotoConnect.isBleHotspot(q))
+        assertEquals(TransportKind.PHONE_HOTSPOT, ConnectionSpec.fromQr(q).mode)
+    }
+
+    @Test fun `Zontes-shape QR — isBleHotspot false AND fromQr TETHER`() {
+        val q = qr(action = 128, modelId = null)
+        assertFalse(CfmotoConnect.isBleHotspot(q))
+        assertEquals(TransportKind.TETHER, ConnectionSpec.fromQr(q).mode)
+    }
+
+    @Test fun `non-Rieju modelid — isBleHotspot false AND fromQr TETHER`() {
+        val q = qr(action = 128, modelId = "12345")
+        assertFalse(CfmotoConnect.isBleHotspot(q))
+        assertEquals(TransportKind.TETHER, ConnectionSpec.fromQr(q).mode)
+    }
+
+    @Test fun `a phone-hotspot QR carrying a SoftAP pwd is neither — both sides say SoftAP`() {
+        val q = qr(action = 128, ssid = "CFMOTO-9", pwd = "secret", modelId = RIEJU)
+        assertFalse(CfmotoConnect.isBleHotspot(q))
+        assertEquals(TransportKind.SOFT_AP, ConnectionSpec.fromQr(q).mode)
     }
 }

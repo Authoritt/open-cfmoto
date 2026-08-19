@@ -168,17 +168,51 @@ class BikeMemoryTest {
         assertEquals(ConnectorChoice.RIEJU_BLE, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
     }
 
-    @Test fun `setConnectorChoice(TETHER) records the choice but leaves spec mode untouched`() {
+    @Test fun `setConnectorChoice(TETHER) forces the stored spec mode to TETHER (keeping the rest)`() {
         val prefs = FakeSharedPreferences()
-        val q = qr(action = 1, ssid = "CFMOTO-1234")
+        val q = qr(action = 1, ssid = "CFMOTO-1234") // a plain SoftAP QR — the pin must override detection
         BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(q).copy(lastEndpointHint = "192.168.1.9"))
+        assertEquals(TransportKind.SOFT_AP, ConnectionSpec.fromQr(q).mode) // guard the premise
 
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
 
         assertEquals(ConnectorChoice.TETHER, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
-        // TETHER routes the classic tether — spec.mode (and the rest of the spec) must not change.
-        assertEquals(TransportKind.SOFT_AP, BikeMemory.specFor(prefs, q)?.mode)
+        // TETHER is a real TransportKind now: the factory selects TetherTransport by spec.mode.
+        assertEquals(TransportKind.TETHER, BikeMemory.specFor(prefs, q)?.mode)
         assertEquals("192.168.1.9", BikeMemory.specFor(prefs, q)?.lastEndpointHint)
+    }
+
+    @Test fun `setConnectorChoice(AUTO) after TETHER resets the spec mode to the fromQr guess`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234")
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
+        assertEquals(TransportKind.TETHER, BikeMemory.specFor(prefs, q)?.mode)
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.AUTO)
+
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        assertEquals(TransportKind.SOFT_AP, BikeMemory.specFor(prefs, q)?.mode)
+    }
+
+    @Test fun `a spec saved before TETHER existed is still readable through specFor`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 128, ssid = "PHONE-HOTSPOT-166B50") // keyed by mac (bikeIdFor)
+        // Written by the pre-TETHER build: every phone-hotspot QR was stored as PHONE_HOTSPOT.
+        BikeMemory.saveSpec(
+            prefs,
+            ConnectionSpec(
+                bikeId = "DD:0D:30:16:6B:50",
+                mode = TransportKind.PHONE_HOTSPOT,
+                ssid = "PHONE-HOTSPOT-166B50",
+                bleMac = "DD:0D:30:16:6B:50",
+                lastEndpointHint = "192.168.43.24",
+            ),
+        )
+
+        val spec = BikeMemory.specFor(prefs, q)
+
+        assertEquals(TransportKind.PHONE_HOTSPOT, spec?.mode) // survives verbatim; the factory heals it
+        assertEquals("192.168.43.24", spec?.lastEndpointHint)
     }
 
     @Test fun `setConnectorChoice(AUTO) clears an override — spec mode back to fromQr, choice back to AUTO`() {

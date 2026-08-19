@@ -49,6 +49,7 @@ import dev.zanderp.opencfmoto.ConnectionState
 import dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory
 import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
+import dev.zanderp.opencfmoto.connection.factory.isBleHotspotQr
 
 /**
  * App-scoped owner of the CFMOTO connect + project trigger (bike Wi‑Fi join, PXC prober start,
@@ -77,29 +78,19 @@ object CfmotoConnect {
     // routes SoftAP/P2P through [BikeConnectionFactory] WITH reconnect + teardown parity
     // (handle retained in [BikeConnectionHolder]; the `BikeLink.onWifiReacquired` fork drives re-establish;
     // raised retry caps), scoped to the non-Android-Auto path. See `flip-work-design.md`. The Rieju
-    // phone-hotspot route ([isBleHotspot] below) goes through the factory INDEPENDENT of `preferFactory`.
-
-    /**
-     * The phone-hotspot model(s) whose dash needs the factory's Wi-Fi-Direct + BLE `PhoneHotspotTransport`:
-     * the Rieju Aventura 500 (Carbit `action=128`, protocol RE'd in spec Appendix A; QR `modelid=43402`).
-     * Every OTHER phone-hotspot bike — Zontes, and opaque `CARBIT` tokens that carry NO `modelid` — keeps the
-     * proven Android-tether [joinPhoneHotspot] path. Extend this set ONLY after a model is confirmed ON THE
-     * BIKE to need the Wi-Fi-Direct + BLE path (adding a working tether bike here would REGRESS it).
-     */
-    private val BLE_HOTSPOT_MODEL_IDS = setOf("43402")
+    // phone-hotspot route ([isBleHotspot] below) goes through the factory INDEPENDENT of `preferFactory`;
+    // the OTHER phone-hotspot bikes (Zontes / opaque CARBIT tether) follow `preferFactory` like SoftAP/P2P —
+    // factory `TetherTransport` for the new cockpit, classic [joinPhoneHotspot] for the legacy/AA callers.
 
     /**
      * A phone-hosts-hotspot QR for a model that needs the factory's `PhoneHotspotTransport` (P2P group-owner +
-     * BLE B360 `0x52`): phone-hotspot (`supportsPhoneHotspot && pwd.isEmpty()` — the classic gate), carrying a
-     * BLE MAC (`bm=`), AND a known-Rieju `modelid` ([BLE_HOTSPOT_MODEL_IDS]). Narrowed to the Rieju on PURPOSE:
-     * the shape (action=128 + `bm=` + empty pwd) is shared by other Carbit-family bikes (e.g. Zontes) that
-     * work TODAY on the manual tether path, so routing by shape alone would divert them onto the Rieju-only
-     * BLE/Wi-Fi-Direct connector (regression). Any non-matching phone-hotspot QR stays on [joinPhoneHotspot].
-     * Pure + `internal` so [joinWifi]'s routing decision is unit-testable without a live scan.
+     * BLE B360 `0x52`) rather than the rider's-Android-hotspot tether. **Delegates to the single definition**
+     * [isBleHotspotQr] (next to `ConnectionSpec`), which `ConnectionSpec.fromQr` also uses to choose between
+     * `PHONE_HOTSPOT` and `TETHER` — one rule, so the routing decision here and the persisted `spec.mode` can
+     * never drift apart (they were two copies until the TETHER connector landed). Kept as a named `internal`
+     * member because it IS this object's routing decision and `CfmotoConnectRoutingTest` guards it here.
      */
-    internal fun isBleHotspot(qr: QrData): Boolean =
-        qr.supportsPhoneHotspot && qr.pwd.isEmpty() && !qr.mac.isNullOrEmpty() &&
-            qr.modelId in BLE_HOTSPOT_MODEL_IDS
+    internal fun isBleHotspot(qr: QrData): Boolean = isBleHotspotQr(qr)
 
     /**
      * The process-global bike PXC client. Reuse [BikeLink.prober] if it already exists (e.g. the AA
@@ -234,20 +225,15 @@ object CfmotoConnect {
         // preferFactory route below (non-AA, own-map connect); on the legacy (preferFactory=false) and AA
         // (gateOnAaSteady=true) paths `choice` is AUTO by construction, so those fall straight through to the
         // existing routing byte-for-byte. AUTO here also falls through unchanged — an explicit choice short-
-        // circuits: the three factory connectors (spec.mode already forced by setConnectorChoice) go through
-        // BikeConnectionFactory; TETHER takes the classic manual-tether path.
+        // circuits: all four connectors (spec.mode already forced by setConnectorChoice) go through
+        // BikeConnectionFactory.
         val choice = if (!gateOnAaSteady && preferFactory) BikeMemory.connectorChoice(context, qr.ssid) else ConnectorChoice.AUTO
         when (choice) {
-            ConnectorChoice.SOFT_AP, ConnectorChoice.P2P, ConnectorChoice.RIEJU_BLE -> {
+            ConnectorChoice.SOFT_AP, ConnectorChoice.P2P, ConnectorChoice.RIEJU_BLE, ConnectorChoice.TETHER -> {
                 LogBus.log("→ [FACTORY] joinWifi: rider-pinned '$choice' for '${qr.ssid}' → factory (spec.mode forced)")
                 val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
                 BikeConnectionHolder.set(conn)
                 conn.connect()
-                return
-            }
-            ConnectorChoice.TETHER -> {
-                LogBus.log("→ joinWifi: rider-pinned TETHER for '${qr.ssid}' → classic phone-hotspot tether")
-                joinPhoneHotspot(context, qr, gateOnAaSteady, activity)
                 return
             }
             ConnectorChoice.AUTO -> { /* fall through to the existing auto logic, UNCHANGED */ }
@@ -272,7 +258,25 @@ object CfmotoConnect {
                 conn.connect()
                 return
             }
-            // Phone-hotspot WITHOUT a BLE mac → the old manual tether assist, unchanged.
+            // Phone-hotspot WITHOUT the Rieju BLE mechanism (Zontes / opaque CARBIT): the tether bikes.
+            // The NEW cockpit (preferFactory, non-AA) runs them through the factory's TetherTransport —
+            // a faithful wrap of joinPhoneHotspot/startPhoneHotspotScan with the driver's retry/teardown
+            // parity. The legacy MainActivity and the Android-Auto path keep the classic call below,
+            // byte-for-byte. Background is refused exactly as joinPhoneHotspot does (the assist dialog and
+            // the system tethering settings need an Activity).
+            if (!gateOnAaSteady && preferFactory) {
+                if (activity == null) {
+                    LogBus.log("→ phone-hotspot bike can't auto-connect in the background — open the app to connect")
+                    ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
+                    return
+                }
+                LogBus.log("→ [FACTORY] tether phone-hotspot '${qr.ssid}' (action=${qr.action}) → TetherTransport (preferFactory; non-AA path)")
+                val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
+                BikeConnectionHolder.set(conn)
+                conn.connect()
+                return
+            }
+            // Legacy / Android-Auto callers: the old manual tether assist, unchanged.
             joinPhoneHotspot(context, qr, gateOnAaSteady, activity)
             return
         }

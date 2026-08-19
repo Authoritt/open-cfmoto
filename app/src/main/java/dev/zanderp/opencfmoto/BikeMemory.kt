@@ -49,8 +49,8 @@ object BikeMemory {
 
     // Per-bike rider-chosen connection MECHANISM override (ConnectorChoice.name), keyed by the (stable)
     // dash SSID like the mode/transport indexes. Absent/blank ⇒ AUTO (the app detects it) — so existing
-    // bikes behave exactly as today. An explicit FACTORY choice is ALSO mirrored into KEY_SPEC_PREFIX's
-    // spec.mode (see setConnectorChoice) because the factory selects the transport by spec.mode.
+    // bikes behave exactly as today. An explicit choice is ALSO mirrored into KEY_SPEC_PREFIX's spec.mode
+    // (see setConnectorChoice) because the factory selects the transport by spec.mode.
     private const val KEY_CONNECTOR_PREFIX = "connector_"
 
     private fun prefs(ctx: Context) =
@@ -226,13 +226,12 @@ object BikeMemory {
 
     /**
      * Set (or clear, with [ConnectorChoice.AUTO]) the per-bike connection mechanism for the bike [qr]
-     * identifies. Takes the whole [QrData] — not just an ssid — because an explicit FACTORY connector must
-     * ALSO be reflected into the stored [ConnectionSpec.mode] (what `BikeConnectionFactory.selectTransport`
-     * reads): SOFT_AP→SOFT_AP, P2P→P2P, RIEJU_BLE→PHONE_HOTSPOT, reusing the bike's existing spec so a
+     * identifies. Takes the whole [QrData] — not just an ssid — because an explicit connector must ALSO be
+     * reflected into the stored [ConnectionSpec.mode] (what `BikeConnectionFactory.selectTransport` reads):
+     * SOFT_AP→SOFT_AP, P2P→P2P, RIEJU_BLE→PHONE_HOTSPOT, TETHER→TETHER, reusing the bike's existing spec so a
      * learned `lastEndpointHint`/`defaultMapProvider` survives. AUTO clears the override by resetting
-     * `spec.mode` back to the QR-derived guess ([ConnectionSpec.fromQr]) so detection runs fresh again;
-     * TETHER routes the classic tether and leaves `spec.mode` untouched. The connector index itself stays
-     * keyed by ssid (blank ssid ⇒ no-op, exactly like [setBikeMode]).
+     * `spec.mode` back to the QR-derived guess ([ConnectionSpec.fromQr]) so detection runs fresh again. The
+     * connector index itself stays keyed by ssid (blank ssid ⇒ no-op, exactly like [setBikeMode]).
      */
     fun setConnectorChoice(ctx: Context, qr: QrData, choice: ConnectorChoice) =
         setConnectorChoice(prefs(ctx), qr, choice)
@@ -242,15 +241,15 @@ object BikeMemory {
         val ssid = qr.ssid
         if (ssid.isBlank()) return
         prefs.edit().putString("$KEY_CONNECTOR_PREFIX$ssid", choice.name).apply()
-        // Reflect the choice in spec.mode so the factory picks the forced transport. TETHER routes classic,
-        // so it never touches spec.mode; the three factory connectors force their transport; AUTO resets to
-        // the fromQr guess to genuinely clear a prior override.
+        // Reflect the choice in spec.mode so the factory picks the forced transport. All four connectors
+        // force their transport (TETHER included, now that it is a real TransportKind with its own factory
+        // transport); AUTO resets to the fromQr guess to genuinely clear a prior override.
         val forcedMode: TransportKind = when (choice) {
             ConnectorChoice.SOFT_AP -> TransportKind.SOFT_AP
             ConnectorChoice.P2P -> TransportKind.P2P
             ConnectorChoice.RIEJU_BLE -> TransportKind.PHONE_HOTSPOT
+            ConnectorChoice.TETHER -> TransportKind.TETHER
             ConnectorChoice.AUTO -> ConnectionSpec.fromQr(qr).mode
-            ConnectorChoice.TETHER -> return
         }
         val base = specFor(prefs, qr) ?: ConnectionSpec.fromQr(qr)
         saveSpec(prefs, base.copy(mode = forcedMode))

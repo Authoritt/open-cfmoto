@@ -171,8 +171,13 @@ class DefaultBikeConnection(
             // F3 (which was about disconnect nulling runJob, now fixed by the cancel-then-join handoff below).
             if (runJob?.isActive == true) return
 
-            // section-6 auto-connect gate: the phone-hotspot path needs a foreground Activity; headless defers.
-            if (spec.mode == TransportKind.PHONE_HOTSPOT && io.activityOrNull() == null) {
+            // section-6 auto-connect gate: BOTH phone-hosts-the-network paths need a foreground Activity —
+            // PHONE_HOTSPOT for the BLE handoff + manual-creds dialog, TETHER for the assist dialog and the
+            // system tethering settings (the classic `joinPhoneHotspot` refuses `activity == null` the same
+            // way). Headless auto-connect defers instead of burning retries on a flow nobody can answer.
+            if ((spec.mode == TransportKind.PHONE_HOTSPOT || spec.mode == TransportKind.TETHER) &&
+                io.activityOrNull() == null
+            ) {
                 _state.value = ConnState.Error("needs foreground", recoverable = false)
                 return
             }
