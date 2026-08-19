@@ -29,6 +29,7 @@ import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
+import dev.overtake.maps.contract.SearchIntent
 import dev.overtake.maps.search.NominatimSearch
 import dev.zanderp.opencfmoto.connection.CfmotoConnect
 import java.io.File
@@ -420,7 +421,11 @@ class MainActivity : AppCompatActivity() {
             private val run = Runnable {
                 val q = destField.text?.toString()?.trim().orEmpty()
                 // Live suggestions only while OUR map is on the bike — not while Android Auto is live.
-                if (q.length >= 2 && GpxSession.active && DashRemote.isAvailable) DashRemote.submit(q)
+                // Live suggestions = the rider is TYPING: the dash must stay on the autocomplete-legal
+                // providers (see DashRemote.submit / SearchIntent).
+                if (q.length >= 2 && GpxSession.active && DashRemote.isAvailable) {
+                    DashRemote.submit(q, typeahead = true)
+                }
             }
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -897,10 +902,12 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, getString(R.string.main_sent_aa, dest), Toast.LENGTH_SHORT).show()
         log("[search] AA: looking up \"$dest\"…")
         val near = lastKnownLatLon()
+        // SUBMIT: one deliberate action (the rider sent a destination to Android Auto).
         NominatimSearch.searchAsync(
             query = dest,
             nearLat = near?.first,
             nearLon = near?.second,
+            intent = SearchIntent.SUBMIT,
             onResult = { places ->
                 runOnUiThread {
                     val best = places.firstOrNull()

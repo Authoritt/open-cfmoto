@@ -12,7 +12,7 @@ package dev.zanderp.opencfmoto
  * keyboard/focus handler so a bike tap can raise the phone IME.
  */
 object DashRemote {
-    @Volatile private var handler: ((String) -> Unit)? = null
+    @Volatile private var handler: ((String, Boolean) -> Unit)? = null
     @Volatile private var navHandler: ((MapPlace) -> Unit)? = null
     @Volatile private var typeOnPhone: (() -> Unit)? = null
     @Volatile private var themeHandler: ((Boolean) -> Unit)? = null
@@ -32,7 +32,7 @@ object DashRemote {
     /** True when a dash is bound and can receive a search (e.g. projected to the bike). */
     val isAvailable: Boolean get() = handler != null
 
-    fun setHandler(h: ((String) -> Unit)?) {
+    fun setHandler(h: ((String, Boolean) -> Unit)?) {
         handler = h
     }
 
@@ -56,12 +56,20 @@ object DashRemote {
         panelHandler = h
     }
 
-    /** Send a search query to the active dash. Returns false if no dash is listening. */
-    fun submit(query: String): Boolean {
+    /**
+     * Send a search query to the active dash. Returns false if no dash is listening.
+     *
+     * @param typeahead true when the rider is still TYPING (the phone's live-suggestion path). The
+     *   dash passes it straight to the search backend, which then uses only the providers allowed
+     *   for autocomplete — Nominatim's usage policy forbids client-side autocomplete against it
+     *   (https://operations.osmfoundation.org/policies/nominatim/). Default false = the rider
+     *   deliberately sent this destination.
+     */
+    fun submit(query: String, typeahead: Boolean = false): Boolean {
         val q = query.trim()
         if (q.isEmpty()) return false
         val h = handler ?: return false
-        h(q)
+        h(q, typeahead)
         return true
     }
 

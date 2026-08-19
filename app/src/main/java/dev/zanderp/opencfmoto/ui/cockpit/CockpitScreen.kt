@@ -103,6 +103,7 @@ import dev.zanderp.opencfmoto.MapPlaces
 import dev.zanderp.opencfmoto.MapPrefs
 import dev.overtake.maps.OvertakeMaps
 import dev.overtake.maps.OvertakeMapsConfig
+import dev.overtake.maps.contract.SearchIntent
 import dev.overtake.maps.search.NominatimSearch
 import dev.overtake.maps.model.Route
 import dev.zanderp.opencfmoto.overtakeRouter
@@ -898,11 +899,19 @@ private fun nextProvider(p: MapProvider): MapProvider = when (p) {
  * rider is told where the destination is going ("Ruta con Google Maps"), a pick is handed to that app,
  * and the keyboard's "Ir" sends the typed text as-is, which is all the old dialog could do.
  *
+ * TWO TIERS, because one of the providers may not be used for autocomplete (see `SearchIntent` and
+ * https://operations.osmfoundation.org/policies/nominatim/):
+ *  - WHILE TYPING (debounced): the platform Geocoder + Photon. Fast, built for autocomplete.
+ *  - ON AN EXPLICIT ASK (the keyboard's search key or the ⌕ button): the same plus Nominatim, the
+ *    precise provider — one deliberate action, one request. This is the tier that finds an exact
+ *    barrio / street number the typeahead couldn't.
+ *
  * Sources, biased to the rider's own fix (fallback: map center):
  *  - the extracted `PlaceSearch` (Overtake library) — its `query()` fans out to the platform Geocoder
  *    (Google-backed on a Play-Services device, for specific local street / neighbourhood addresses
- *    Photon/Nominatim miss) AND to Photon + Nominatim worldwide autocomplete, then cross-source merges,
- *    ranks and dedupes them by the [NominatimSearch.relevance] / [NominatimSearch.dedupeKey] blend;
+ *    Photon/Nominatim miss) AND to the worldwide geocoders its `SearchIntent` allows, then
+ *    cross-source merges, ranks and dedupes them by the [NominatimSearch.relevance] /
+ *    [NominatimSearch.dedupeKey] blend;
  *  - [MapPlaces] — the rider's own recents / favourites / home, matched LOCALLY (no network).
  *
  * Feel: with an empty/short query the dropdown instantly lists saved + recent places; while typing it
@@ -926,6 +935,19 @@ private fun CockpitSearchOverlay(
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<SearchPick>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
+    // The explicit search: a counter, not a boolean, because pressing search TWICE on the same text
+    // must run it twice (the rider is retrying) and a LaunchedEffect only restarts when its key
+    // changes. The text is captured ALONGSIDE the tick so the effect can never be re-triggered by a
+    // keystroke — that would be exactly the autocomplete-against-Nominatim this design forbids.
+    var deepSearchTick by remember { mutableStateOf(0) }
+    var deepSearchQuery by remember { mutableStateOf("") }
+    val runDeepSearch = {
+        val q = query.trim()
+        if (q.length >= 2) {
+            deepSearchQuery = q
+            deepSearchTick++
+        }
+    }
     val focus = remember { FocusRequester() }
     // The extracted place-search (Stage 1 of the map-library extraction): a native MapProvider built
     // from the fork's config. We consume only its PlaceSearch here — the renderer/router are pending
@@ -974,23 +996,29 @@ private fun CockpitSearchOverlay(
         // Instant paint: the rider's own matching places + any previously-cached network answer, so the
         // list is populated the moment the user types, before the debounce/network even starts.
         val cached = if (bLat != null && bLon != null) {
-            NominatimSearch.cachedBiased(q, bLat, bLon) ?: emptyList()
+            NominatimSearch.cachedBiased(q, bLat, bLon, SearchIntent.TYPEAHEAD) ?: emptyList()
         } else {
             emptyList()
         }
         results = rankPicks(q, bLat, bLon, cached, recents, favorites, homePlace)
         searching = true
-        delay(250) // debounce — cancelled if the query changes before it elapses
+        // THE debounce for place search — the only one on this path, deliberately. Nothing leaves
+        // the device until the rider pauses: LaunchedEffect(query) cancels this coroutine on the next
+        // keystroke, so the delay simply never elapses and no request is built. Do NOT add a second
+        // one inside the library (it paces the PRECISE provider on top of this, which is a different
+        // job); two debounces would just add latency nobody can account for.
+        delay(SEARCH_DEBOUNCE_MS)
 
-        // ONE suspend call runs BOTH network sources off the main thread (platform Geocoder + Photon/
-        // Nominatim) and returns them cross-source merged, ranked and deduped by the SAME blend the rows
-        // are scored with (that merge moved into the Overtake library). LaunchedEffect(query) cancels
-        // this coroutine when the query changes, so a superseded answer never paints — replacing the old
-        // seq/Handler marshalling. A failure degrades to no network results; the rider's own local
-        // places still show.
+        // ONE suspend call runs the typeahead sources off the main thread (platform Geocoder +
+        // Photon) and returns them cross-source merged, ranked and deduped by the SAME blend the rows
+        // are scored with (that merge moved into the Overtake library). TYPEAHEAD is what keeps
+        // Nominatim off the typing path — see SearchIntent for the policy. LaunchedEffect(query)
+        // cancels this coroutine when the query changes, so a superseded answer never paints —
+        // replacing the old seq/Handler marshalling. A failure degrades to no network results; the
+        // rider's own local places still show.
         val near = if (bLat != null && bLon != null) dev.overtake.maps.model.GeoPoint(bLat, bLon) else null
         val net = try {
-            search.query(q, near)
+            search.query(q, near, SearchIntent.TYPEAHEAD)
         } catch (ce: kotlinx.coroutines.CancellationException) {
             throw ce
         } catch (e: Exception) {
@@ -998,6 +1026,33 @@ private fun CockpitSearchOverlay(
             emptyList()
         }
         results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
+        searching = false
+    }
+
+    // The EXPLICIT search: bumped by the keyboard's search key or by the ⌕ button, never by typing.
+    // This is the only trigger allowed to spend a Nominatim request (SearchIntent.SUBMIT) — where the
+    // precise local answers (the barrio, the street number) come from.
+    LaunchedEffect(deepSearchTick) {
+        if (deepSearchTick == 0) return@LaunchedEffect
+        val q = deepSearchQuery
+        if (q.length < 2) return@LaunchedEffect
+        val bLat = biasLat
+        val bLon = biasLon
+        val near = if (bLat != null && bLon != null) dev.overtake.maps.model.GeoPoint(bLat, bLon) else null
+        searching = true
+        val net = try {
+            search.query(q, near, SearchIntent.SUBMIT)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            LogBus.log("[cockpit-search] ${e.message ?: e}")
+            emptyList()
+        }
+        // The rider kept typing while the precise provider was answering: that answer belongs to text
+        // that is no longer on screen, so drop it instead of painting a stale list over the live one.
+        if (query.trim() == q) {
+            results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
+        }
         searching = false
     }
 
@@ -1026,14 +1081,20 @@ private fun CockpitSearchOverlay(
                     placeholder = { Text(stringResource(R.string.ovk_search_address_or_place)) },
                     // Google/Waze: the keyboard's action key IS the old dialog's "Ir" — free text goes
                     // straight to that app, so a place the autocomplete can't find is still reachable.
+                    // On Propio it is "Buscar": the deliberate action that runs the precise search.
                     keyboardOptions = KeyboardOptions(
-                        imeAction = if (handsToNavApp) ImeAction.Go else ImeAction.Default,
+                        imeAction = if (handsToNavApp) ImeAction.Go else ImeAction.Search,
                     ),
                     keyboardActions = KeyboardActions(
                         onGo = { if (query.isNotBlank()) onSubmitText(query) },
+                        onSearch = { runDeepSearch() },
                     ),
                     modifier = Modifier.weight(1f).focusRequester(focus),
                 )
+                // The explicit search. While typing, the list is served by the fast providers; this
+                // button is what asks the precise one — and the only thing allowed to (see
+                // SearchIntent / the Nominatim usage policy). Same ⌕ glyph as the map's search FAB.
+                GlyphBox("⌕", runDeepSearch)
             }
             // Where this destination is going. Only for the apps that own the navigation — on Propio the
             // cockpit itself navigates, and saying "Ruta con Overtake" would be noise.
@@ -1075,6 +1136,20 @@ private fun CockpitSearchOverlay(
         }
     }
 }
+
+/**
+ * How long the rider has to STOP typing before the destination box asks the network (ms).
+ *
+ * 250 ms was too eager: at that setting a normal address ("villa del sol sector #2") fired several
+ * searches while being typed, each one a request the next keystroke made pointless. 420 ms is a
+ * comfortable typing pause without feeling laggy — and the list is NOT empty meanwhile: the rider's
+ * own places plus any cached answer are painted before this delay starts.
+ *
+ * Note what this debounce is NOT: it is not what keeps the app inside the Nominatim usage policy.
+ * That is `SearchIntent` — no amount of debouncing makes as-you-type Nominatim legal, so the typing
+ * path simply does not use it.
+ */
+private const val SEARCH_DEBOUNCE_MS = 420L
 
 /** How a suggestion reached the list — drives the leading glyph and the ranking boost. */
 private enum class SearchKind { HOME, FAVORITE, RECENT, RESULT }

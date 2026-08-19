@@ -40,6 +40,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
 import dev.overtake.maps.RendererKind
 import dev.overtake.maps.contract.MapRenderer
+import dev.overtake.maps.contract.SearchIntent
 import dev.overtake.maps.search.NominatimSearch
 import dev.overtake.maps.route.offline.OfflinePoiIndex
 import dev.zanderp.opencfmoto.aa.AaInput
@@ -1123,7 +1124,14 @@ class GpxDashUi(
                 if (searchInput.text.isNullOrBlank()) showIdle()
             }
         }
-        fun runDashSearch(query: String) {
+        /**
+         * @param typeahead true when this runs from TYPING (the dash's own debounced suggestions, or
+         *   the phone bridge while the rider types on the phone) — then only autocomplete-legal
+         *   providers run. False = the rider explicitly asked (Go button, keyboard search key, a
+         *   destination sent from the phone). See [dev.overtake.maps.contract.SearchIntent]:
+         *   Nominatim's usage policy forbids client-side autocomplete against it.
+         */
+        fun runDashSearch(query: String, typeahead: Boolean = false) {
             val q = query.trim()
             if (q.isEmpty()) {
                 showIdle()
@@ -1138,6 +1146,7 @@ class GpxDashUi(
             val offline = OfflinePoiIndex.search(context, q, nearLat, nearLon)
             NominatimSearch.searchAsync(
                 q, nearLat, nearLon,
+                intent = if (typeahead) SearchIntent.TYPEAHEAD else SearchIntent.SUBMIT,
                 onResult = { list -> main.post {
                     if (!isAlive() || released) return@post
                     showSearchResults(if (list.isNotEmpty()) list else offline)
@@ -1442,7 +1451,7 @@ class GpxDashUi(
         root.findViewById<View>(R.id.gpx_search_close).setOnClickListener { hideSheets() }
         dimmer.setOnClickListener { hideSheets() }
         // Phone → dash search bridge: the phone keyboard types into this (projected) search.
-        DashRemote.setHandler { q ->
+        DashRemote.setHandler { q, typeahead ->
             main.post {
                 if (!isAlive() || released) return@post
                 menuPanel.visibility = View.GONE
@@ -1452,7 +1461,7 @@ class GpxDashUi(
                 searchPanel.bringToFront()
                 searchInput.setText(q)
                 searchInput.setSelection(q.length)
-                runDashSearch(q)
+                runDashSearch(q, typeahead)
             }
         }
         // Phone/cockpit → dash navigate bridge: re-target the LIVE (already-projected) dash to a
@@ -1483,7 +1492,7 @@ class GpxDashUi(
             if (!isAlive() || released) return@Runnable
             if (searchPanel.visibility != View.VISIBLE) return@Runnable
             val q = searchInput.text?.toString()?.trim().orEmpty()
-            if (q.length >= 2) runDashSearch(q)
+            if (q.length >= 2) runDashSearch(q, typeahead = true)
         }
         searchInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
