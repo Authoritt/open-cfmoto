@@ -115,26 +115,51 @@ class BikeMemoryTest {
 
     @Test fun `connectorChoice defaults to AUTO when never set`() {
         val prefs = FakeSharedPreferences()
-        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, qr(action = 1, ssid = "CFMOTO-1234")))
     }
 
-    @Test fun `connectorChoice defaults to AUTO for a blank ssid`() {
+    @Test fun `connectorChoice defaults to AUTO for a QR with no stable id at all`() {
         val prefs = FakeSharedPreferences()
-        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, ""))
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, qr(action = 1, ssid = "", mac = null)))
     }
 
     @Test fun `setConnectorChoice persists and connectorChoice reads it back`() {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 1, ssid = "CFMOTO-1234")
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.P2P)
-        assertEquals(ConnectorChoice.P2P, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        assertEquals(ConnectorChoice.P2P, BikeMemory.connectorChoice(prefs, q))
     }
 
-    @Test fun `setConnectorChoice with a blank ssid is a no-op (writes nothing)`() {
+    // FLIPPED (was `setConnectorChoice with a blank ssid is a no-op`, which enshrined the defect): the index
+    // is keyed by ConnectionSpec.bikeIdFor, so the phone-hotspot bikes whose QRs carry NO ssid — Rieju,
+    // Zontes, opaque CARBIT: exactly the ones with the newest, least-proven connectors — can hold a pin like
+    // any other bike. While it was ssid-keyed, the Garage/Scan picker AND the help sheet's "try another
+    // connector" escape hatch were silent no-ops for them.
+    @Test fun `setConnectorChoice on a mac-only (blank-ssid) QR DOES persist and read back`() {
         val prefs = FakeSharedPreferences()
-        val q = qr(action = 1, ssid = "", mac = "AA:AA:AA:AA:AA:AA")
+        val q = qr(action = 128, ssid = "", mac = "AA:AA:AA:AA:AA:AA")
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
+
+        assertEquals(ConnectorChoice.TETHER, BikeMemory.connectorChoice(prefs, q))
+        assertEquals(TransportKind.TETHER, BikeMemory.specFor(prefs, q)?.mode)
+        assertEquals("the pin is stored under the mac, not the (blank) ssid", "TETHER", prefs.getString("connector_AA:AA:AA:AA:AA:AA", null))
+    }
+
+    @Test fun `setConnectorChoice with NO stable id at all (no mac, no ssid) is still a no-op`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "", mac = null)
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.SOFT_AP)
-        assertEquals("a blank-ssid connector choice must not write anything", 0, prefs.size)
+        assertEquals("nothing to key by — must not write anything", 0, prefs.size)
+    }
+
+    @Test fun `connectorChoice still reads a pin written under the LEGACY ssid key (upgrade path)`() {
+        val prefs = FakeSharedPreferences()
+        val q = qr(action = 1, ssid = "CFMOTO-1234", mac = "AA:AA:AA:AA:AA:AA")
+        // Exactly what the pre-fix build wrote for a bike that has BOTH a mac and an ssid.
+        prefs.edit().putString("connector_CFMOTO-1234", "P2P").apply()
+
+        assertEquals(ConnectorChoice.P2P, BikeMemory.connectorChoice(prefs, q))
     }
 
     @Test fun `setConnectorChoice(SOFT_AP) forces the stored spec mode to SOFT_AP`() {
@@ -165,7 +190,7 @@ class BikeMemoryTest {
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.RIEJU_BLE)
 
         assertEquals(TransportKind.PHONE_HOTSPOT, BikeMemory.specFor(prefs, q)?.mode)
-        assertEquals(ConnectorChoice.RIEJU_BLE, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        assertEquals(ConnectorChoice.RIEJU_BLE, BikeMemory.connectorChoice(prefs, q))
     }
 
     @Test fun `setConnectorChoice(TETHER) forces the stored spec mode to TETHER (keeping the rest)`() {
@@ -176,13 +201,13 @@ class BikeMemoryTest {
 
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
 
-        assertEquals(ConnectorChoice.TETHER, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        assertEquals(ConnectorChoice.TETHER, BikeMemory.connectorChoice(prefs, q))
         // TETHER is a real TransportKind now: the factory selects TetherTransport by spec.mode.
         assertEquals(TransportKind.TETHER, BikeMemory.specFor(prefs, q)?.mode)
         assertEquals("192.168.1.9", BikeMemory.specFor(prefs, q)?.lastEndpointHint)
     }
 
-    @Test fun `setConnectorChoice(AUTO) after TETHER resets the spec mode to the fromQr guess`() {
+    @Test fun `setConnectorChoice(AUTO) after TETHER resets the spec mode to the auto-detected one`() {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 1, ssid = "CFMOTO-1234")
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.TETHER)
@@ -190,7 +215,7 @@ class BikeMemoryTest {
 
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.AUTO)
 
-        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, q))
         assertEquals(TransportKind.SOFT_AP, BikeMemory.specFor(prefs, q)?.mode)
     }
 
@@ -215,7 +240,7 @@ class BikeMemoryTest {
         assertEquals("192.168.43.24", spec?.lastEndpointHint)
     }
 
-    @Test fun `setConnectorChoice(AUTO) clears an override — spec mode back to fromQr, choice back to AUTO`() {
+    @Test fun `setConnectorChoice(AUTO) clears an override — spec mode back to auto-detected, choice back to AUTO`() {
         val prefs = FakeSharedPreferences()
         val q = qr(action = 1, ssid = "CFMOTO-1234") // fromQr mode = SOFT_AP
         // Rider first pins P2P (spec.mode → P2P), then returns to Automatic.
@@ -224,7 +249,7 @@ class BikeMemoryTest {
 
         BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.AUTO)
 
-        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, "CFMOTO-1234"))
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, q))
         assertEquals(TransportKind.SOFT_AP, BikeMemory.specFor(prefs, q)?.mode) // reset to the fromQr guess
     }
 

@@ -121,6 +121,30 @@ class DefaultBikeConnectionTest {
     }
 
     @Test
+    fun `the terminal Error carries the suggested alternative connector (advice, not a cascade)`() {
+        runBlocking {
+            val transport = RecordingTransport()
+            val conn = DefaultBikeConnection(
+                transport = transport,
+                links = listOf(RecordingLink()),
+                spec = softApSpec(),
+                io = NoActivityIo,
+                maxAttempts = 1,
+                // What BikeConnectionFactory.create computes for a SoftAP bike whose QR also advertises P2P.
+                alternative = ConnectorChoice.P2P,
+            )
+
+            conn.connect()
+            val terminal = withTimeout(5_000) { conn.state.first { it is ConnState.Error } } as ConnState.Error
+
+            assertEquals(ConnectorChoice.P2P, terminal.alternative)
+            // …and the driver did NOT act on it — it holds ONE injected transport and simply tore it down.
+            // (A cascade would need a second transport, which this class has no way to obtain.)
+            assertTrue("teardown still runs on the fatal path", transport.closed >= 1)
+        }
+    }
+
+    @Test
     fun `disconnect during connect tears down and ends Idle (F1, F3)`() {
         runBlocking {
             val transport = RecordingTransport()

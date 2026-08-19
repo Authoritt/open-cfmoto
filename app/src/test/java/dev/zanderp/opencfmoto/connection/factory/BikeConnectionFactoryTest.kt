@@ -1,6 +1,7 @@
 package dev.zanderp.opencfmoto.connection.factory
 
 import dev.zanderp.opencfmoto.QrData
+import dev.zanderp.opencfmoto.WifiTransport
 import dev.zanderp.opencfmoto.connection.factory.transport.P2pTransport
 import dev.zanderp.opencfmoto.connection.factory.transport.PhoneHotspotTransport
 import dev.zanderp.opencfmoto.connection.factory.transport.SoftApTransport
@@ -20,7 +21,7 @@ class BikeConnectionFactoryTest {
 
     private fun spec(kind: TransportKind) = ConnectionSpec(bikeId = "test-bike", mode = kind)
 
-    private fun qr(action: Int, ssid: String = "", pwd: String = "", modelId: String? = null) =
+    private fun qr(action: Int, ssid: String = "", pwd: String = "", modelId: String? = null): QrData =
         QrData(
             ssid = ssid, pwd = pwd, auth = null, mac = "DD:0D:30:16:6B:50", name = null,
             action = action, modelId = modelId, sn = null, channel = null,
@@ -56,14 +57,23 @@ class BikeConnectionFactoryTest {
         )
     }
 
-    // Reconnect-parity caps (review I2 / flip-work §2): SoftAP/P2P retry forever to match classic; the two
-    // phone-hosts-the-network connectors (Rieju BLE handoff, rider-driven tether) keep the default give-up
-    // caps — interactive one-shot flows, not daily-ride reconnect paths.
-    @Test fun `retryCapsFor gives SoftAP effectively-infinite caps`() =
-        assertEquals(Int.MAX_VALUE to Int.MAX_VALUE, BikeConnectionFactory.retryCapsFor(TransportKind.SOFT_AP))
+    // Retry caps: FINITE for EVERY kind. The old `Int.MAX_VALUE` for SoftAP/P2P claimed parity with classic's
+    // "unbounded retry", but classic's unbounded retry is unbounded *SoftAP* retry AFTER a ~6 s P2P bail-out —
+    // never unbounded retry on a transport that cannot work. With no cascade, an infinite cap on the wrong
+    // connector is a bike that retries forever in silence and latches auto-connect OFF.
+    @Test fun `retryCapsFor is FINITE for every transport kind (no infinite retry anywhere)`() {
+        for (kind in TransportKind.entries) {
+            val (maxAttempts, flapMax) = BikeConnectionFactory.retryCapsFor(kind)
+            assertTrue("maxAttempts for " + kind + " must be finite but was " + maxAttempts, maxAttempts < Int.MAX_VALUE)
+            assertTrue("flapMaxFailures for " + kind + " must be finite but was " + flapMax, flapMax < Int.MAX_VALUE)
+        }
+    }
 
-    @Test fun `retryCapsFor gives P2P effectively-infinite caps`() =
-        assertEquals(Int.MAX_VALUE to Int.MAX_VALUE, BikeConnectionFactory.retryCapsFor(TransportKind.P2P))
+    @Test fun `retryCapsFor gives SoftAP the default finite caps`() =
+        assertEquals(MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.SOFT_AP))
+
+    @Test fun `retryCapsFor gives P2P the default finite caps`() =
+        assertEquals(MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.P2P))
 
     @Test fun `retryCapsFor keeps the default caps for PHONE_HOTSPOT`() =
         assertEquals(MAX_ATTEMPTS to FLAP_MAX_FAILURES, BikeConnectionFactory.retryCapsFor(TransportKind.PHONE_HOTSPOT))
@@ -79,6 +89,54 @@ class BikeConnectionFactoryTest {
         val stored = ConnectionSpec(bikeId = "bike", mode = TransportKind.PHONE_HOTSPOT)
         val healed = BikeConnectionFactory.reconcileStoredMode(stored, qr(action = 128), ConnectorChoice.AUTO)
         assertEquals(TransportKind.TETHER, healed.mode)
+    }
+
+    // --- reconcileStoredMode: a stored Wi-Fi mode is a DETECTION result, so it follows today's detection ---
+
+    @Test fun `reconcileStoredMode heals the owner's DIRECT- bike from P2P to SOFT_AP (learned winner AP)`() {
+        // The CRITICAL case: paired when the mode was a bare fromQr guess, so the stored mode is P2P even
+        // though P2P never forms on this phone and the live path already learned "AP".
+        val stored = ConnectionSpec(
+            bikeId = "DD:0D:30:16:6B:50",
+            mode = TransportKind.P2P,
+            ssid = "DIRECT-go-CFMOTO-0CDC0B",
+            pwd = "12345678",
+            lastEndpointHint = "192.168.43.1",
+        )
+        val healed = BikeConnectionFactory.reconcileStoredMode(
+            stored,
+            qr(action = 9, ssid = "DIRECT-go-CFMOTO-0CDC0B", pwd = "12345678"),
+            ConnectorChoice.AUTO,
+            WifiTransport.AUTO,
+            remembered = "AP",
+        )
+        assertEquals(TransportKind.SOFT_AP, healed.mode)
+        assertEquals("192.168.43.1", healed.lastEndpointHint) // everything else survives
+    }
+
+    @Test fun `reconcileStoredMode never touches a stored mode when the rider pinned a connector`() {
+        // Same inputs as the test above, except the rider pinned Wi-Fi Direct: a pin is law, full stop.
+        val stored = ConnectionSpec(bikeId = "b", mode = TransportKind.P2P, ssid = "DIRECT-go-CFMOTO-0CDC0B")
+        val out = BikeConnectionFactory.reconcileStoredMode(
+            stored,
+            qr(action = 9, ssid = "DIRECT-go-CFMOTO-0CDC0B", pwd = "12345678"),
+            ConnectorChoice.P2P,
+            WifiTransport.AUTO,
+            remembered = "AP",
+        )
+        assertEquals(TransportKind.P2P, out.mode)
+    }
+
+    @Test fun `reconcileStoredMode follows the rider's Setup preference under AUTO`() {
+        val stored = ConnectionSpec(bikeId = "b", mode = TransportKind.SOFT_AP, ssid = "DIRECT-go-CFMOTO-0CDC0B")
+        val out = BikeConnectionFactory.reconcileStoredMode(
+            stored,
+            qr(action = 9, ssid = "DIRECT-go-CFMOTO-0CDC0B", pwd = "12345678"),
+            ConnectorChoice.AUTO,
+            WifiTransport.P2P,
+            remembered = null,
+        )
+        assertEquals(TransportKind.P2P, out.mode)
     }
 
     @Test fun `reconcileStoredMode leaves a Rieju spec on PHONE_HOTSPOT`() {

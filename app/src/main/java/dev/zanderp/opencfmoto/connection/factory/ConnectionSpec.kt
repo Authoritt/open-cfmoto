@@ -5,6 +5,7 @@ package dev.zanderp.opencfmoto.connection.factory
 
 import com.google.gson.Gson
 import dev.zanderp.opencfmoto.QrData
+import dev.zanderp.opencfmoto.WifiTransport
 import dev.zanderp.opencfmoto.settings.MapProvider
 
 /**
@@ -102,15 +103,23 @@ fun ConnectionSpec.Companion.bikeIdFor(qr: QrData): String = qr.mac ?: qr.ssid
  *    Which of the TWO phone-hosts-the-network mechanisms it gets is [isBleHotspotQr]: a known-Rieju
  *    `modelid` means the BLE + Wi-Fi-Direct [TransportKind.PHONE_HOTSPOT] connector; every other
  *    phone-hotspot QR (Zontes, opaque `CARBIT`) means the rider's-Android-hotspot [TransportKind.TETHER].
- *  - else [QrData.supportsP2p] (bit3) only counts for a genuine Wi-Fi Direct QR (`ssid` starts with
- *    "DIRECT") — some bikes set bit3 alongside a normal AP ssid, which must still resolve to SoftAP.
+ *  - else [QrData.supportsP2p] (bit3) counts for a genuine Wi-Fi Direct QR (`ssid` starts with `DIRECT-`,
+ *    matched CASE-INSENSITIVELY exactly like classic `joinWifi`) **or** for a P2P-ONLY QR (bit3 set, no AP
+ *    bit): the Voge-5G / ZT5G class, which classic joins by MAC — mapping those to SoftAP handed
+ *    `SoftApTransport` an empty PSK, i.e. a guaranteed failure. A bike that sets bit3 *alongside* a normal
+ *    AP ssid still resolves to SoftAP here.
  *  - else SoftAp (the common case: bit0/bit1).
+ *
+ * This is only the **family** decision (which of the four mechanisms the QR describes). The rider's Setup
+ * preference and the learned per-bike winner refine SoftAP-vs-P2P in [resolveWifiTransport]; the persisted
+ * pairing decision that combines both is [detectedAtPairing] — that, not this, is what the factory stores.
  */
 fun ConnectionSpec.Companion.fromQr(qr: QrData): ConnectionSpec {
     val mode = when {
         qr.supportsPhoneHotspot && qr.pwd.isEmpty() ->
             if (isBleHotspotQr(qr)) TransportKind.PHONE_HOTSPOT else TransportKind.TETHER
-        qr.supportsP2p && qr.ssid.startsWith("DIRECT") -> TransportKind.P2P
+        qr.supportsP2p && (qr.ssid.startsWith(DIRECT_SSID_PREFIX, ignoreCase = true) || !qr.supportsAp) ->
+            TransportKind.P2P
         else -> TransportKind.SOFT_AP
     }
     return ConnectionSpec(
@@ -120,4 +129,85 @@ fun ConnectionSpec.Companion.fromQr(qr: QrData): ConnectionSpec {
         pwd = qr.pwd,
         bleMac = qr.mac,
     )
+}
+
+/** Wi-Fi Direct SSID prefix, matched case-insensitively — classic `joinWifi`'s exact form. */
+const val DIRECT_SSID_PREFIX: String = "DIRECT-"
+
+/**
+ * **The single Wi-Fi connector decision, shared by the classic path and the factory.** Extracted VERBATIM
+ * from `CfmotoConnect.joinWifi` (which now calls this instead of holding its own copy), so a bike can never
+ * be routed one way by the legacy UI and another way by the cockpit — the CRITICAL divergence this fixes:
+ * the factory used to derive the mode from the QR alone, ignoring both the rider's Setup preference and the
+ * learned per-bike winner, and sent the owner's `DIRECT-go-CFMOTO-*` 450NK (learned winner `"AP"`, because
+ * P2P never forms on that phone/bike) to `P2pTransport` on every ride.
+ *
+ * Pure by construction (no Context, no I/O): the caller supplies [pref] (`AppSettings.transport`) and
+ * [remembered] (`BikeMemory.winningTransport`, the `"AP"`/`"P2P"` string the live path records on success).
+ *
+ * @param pref the rider's Setup → Wi-Fi transport preference. `AP`/`P2P` are explicit orders;
+ *   [WifiTransport.AUTO] means "decide from the QR".
+ * @param remembered the transport that last produced a live link for this bike, or null. It refines
+ *   **AUTO only** — an explicit `AP`/`P2P` is the rider's call — so callers pass null unless
+ *   [pref] is [WifiTransport.AUTO] (classic does exactly this, and so does [detectedAtPairing]).
+ * @return [TransportKind.P2P] or [TransportKind.SOFT_AP] — never a phone-hosts-the-network kind. This
+ *   answers "SoftAP or Wi-Fi Direct?" for a QR already known to be a Wi-Fi bike.
+ */
+fun resolveWifiTransport(qr: QrData, pref: WifiTransport, remembered: String?): TransportKind {
+    // AUTO: P2P when the QR is P2P-only (incl. non-DIRECT SSIDs — join by MAC), or DIRECT-*. Never force
+    // P2P when the QR is SoftAP-only (action bit3 clear) — Setup→P2P on those bikes only burns 25s then
+    // falls back (Benelli TRK / bj* SSIDs in the field).
+    val useP2p = when (pref) {
+        WifiTransport.P2P -> qr.supportsP2p || !qr.supportsAp
+        WifiTransport.AP -> false
+        WifiTransport.AUTO ->
+            (qr.supportsP2p && !qr.supportsAp) ||
+                (qr.ssid.startsWith(DIRECT_SSID_PREFIX, ignoreCase = true) &&
+                    (qr.supportsP2p || !qr.supportsAp))
+    }
+    // Per-bike memory refines AUTO only: once a transport has produced a live link for THIS bike, use it
+    // and skip the dead path. Some dashes advertise DIRECT-* + SoftAP, so AUTO would try P2P first and burn
+    // the whole timeout on every connect even when P2P never forms a group on this phone.
+    val eff = when {
+        remembered == "AP" && qr.supportsAp -> false
+        remembered == "P2P" && qr.supportsP2p -> true
+        else -> useP2p
+    }
+    return if (eff) TransportKind.P2P else TransportKind.SOFT_AP
+}
+
+/**
+ * **The connector a bike is PAIRED with**: decided ONCE (at scan/seed time), persisted per bike, and used
+ * verbatim at ride time — no cascade, no fallback, because fallbacks are what make connecting slow (classic
+ * burns ~25 s on P2P before dropping to SoftAP). A failed connect fails bounded and visibly, and the app
+ * recommends the alternative ([suggestAlternativeConnector]) instead of silently trying it.
+ *
+ * Composition: [fromQr] picks the FAMILY (phone-hosts-the-network vs Wi-Fi), then — for the two Wi-Fi kinds
+ * only — [resolveWifiTransport] applies the rider's Setup preference and the learned winner, exactly as
+ * classic `joinWifi` does. The phone-hotspot kinds are returned untouched: neither preference nor winner
+ * index has ever applied to them.
+ *
+ * The last refinement mirrors classic `joinWifi`'s MAC carve-out: a P2P-only QR with a SoftAP password but
+ * NO mac has nothing to join Wi-Fi Direct *by*, so classic joins SoftAP rather than burn ~40s on "MAC ERROR"
+ * (Voge-5G / ZT5G in the field). Reproduced here so the persisted decision matches classic end-to-end.
+ *
+ * @param remembered pass `BikeMemory.winningTransport(...)` only when [pref] is [WifiTransport.AUTO] (null
+ *   otherwise) — see [resolveWifiTransport].
+ */
+fun ConnectionSpec.Companion.detectedAtPairing(
+    qr: QrData,
+    pref: WifiTransport,
+    remembered: String?,
+): ConnectionSpec {
+    val base = fromQr(qr)
+    return when (base.mode) {
+        TransportKind.PHONE_HOTSPOT, TransportKind.TETHER -> base
+        TransportKind.SOFT_AP, TransportKind.P2P -> {
+            val resolved = resolveWifiTransport(qr, pref, remembered)
+            val macless = resolved == TransportKind.P2P &&
+                !qr.ssid.startsWith(DIRECT_SSID_PREFIX, ignoreCase = true) &&
+                qr.mac.isNullOrBlank() && qr.pwd.isNotEmpty()
+            base.copy(mode = if (macless) TransportKind.SOFT_AP else resolved)
+        }
+    }
 }

@@ -46,10 +46,8 @@ import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.QrScanActivity
 import dev.zanderp.opencfmoto.SavedBike
-import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
 import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
-import dev.zanderp.opencfmoto.connection.factory.fromQr
 import dev.zanderp.opencfmoto.settings.MapProvider
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.connection.ConnectorChoiceDialog
@@ -123,7 +121,9 @@ fun GarageScreen(nav: NavController) {
                 // A bike whose raw QR no longer parses (corrupted/legacy entry) has no bikeId to key a
                 // spec by — mirrors ModeDialog's own blank-ssid no-op above (BikeMemory.setBikeMode).
                 bike.qr?.let { qr ->
-                    val spec = BikeMemory.specFor(ctx, qr) ?: ConnectionSpec.fromQr(qr)
+                    // A bike with no spec yet gets the SAME auto-detected connector `save` would have
+                    // seeded — a map-provider pick must never persist a different (bare-QR) connector.
+                    val spec = BikeMemory.specFor(ctx, qr) ?: BikeMemory.autoDetectedSpec(ctx, qr)
                     BikeMemory.saveSpec(ctx, spec.copy(defaultMapProvider = picked))
                 }
                 refresh++
@@ -135,10 +135,17 @@ fun GarageScreen(nav: NavController) {
 
     connectorFor?.let { bike ->
         val qr = bike.qr
-        val current = remember(bike.raw, refresh) { BikeMemory.connectorChoice(ctx, qr?.ssid ?: "") }
+        val current = remember(bike.raw, refresh) {
+            qr?.let { BikeMemory.connectorChoice(ctx, it) } ?: ConnectorChoice.AUTO
+        }
         // The detected hint needs a mode; a corrupt/legacy entry with no parseable QR has none — fall back
         // to SOFT_AP purely for the hint (onPick is a no-op for it, like the map/mode dialogs above).
-        val detected = remember(bike.raw) { qr?.let { ConnectionSpec.fromQr(it).mode } ?: TransportKind.SOFT_AP }
+        // `autoDetectedMode` is the connector AUTO really resolves to (QR + Setup preference + this bike's
+        // learned winner); the bare `fromQr` guess used to be shown here, which made the hint lie about
+        // DIRECT-* bikes whose P2P never forms on this phone.
+        val detected = remember(bike.raw, refresh) {
+            qr?.let { BikeMemory.autoDetectedMode(ctx, it) } ?: TransportKind.SOFT_AP
+        }
         ConnectorChoiceDialog(
             bikeName = bike.name,
             current = current,
@@ -167,10 +174,15 @@ private fun BikeRow(
     val ssid = remember(bike.raw) { bike.qr?.ssid ?: "" }
     val mode = remember(bike.raw, refreshKey) { BikeMemory.bikeMode(ctx, ssid) }
     val provider = remember(bike.raw, refreshKey) { bike.qr?.let { BikeMemory.specFor(ctx, it)?.defaultMapProvider } }
-    val connector = remember(bike.raw, refreshKey) { BikeMemory.connectorChoice(ctx, ssid) }
+    val connector = remember(bike.raw, refreshKey) {
+        bike.qr?.let { BikeMemory.connectorChoice(ctx, it) } ?: ConnectorChoice.AUTO
+    }
     // Same AUTO-fallback reasoning as the connectorFor dialog below: a corrupt/legacy entry with no
     // parseable QR has no detected mode — SOFT_AP is purely a display fallback, never persisted from here.
-    val detected = remember(bike.raw) { bike.qr?.let { ConnectionSpec.fromQr(it).mode } ?: TransportKind.SOFT_AP }
+    // What AUTO would really use, not the bare QR guess — see that dialog.
+    val detected = remember(bike.raw, refreshKey) {
+        bike.qr?.let { BikeMemory.autoDetectedMode(ctx, it) } ?: TransportKind.SOFT_AP
+    }
     val borderColor = if (current) c.ignition.copy(alpha = 0.45f) else c.line
     Row(
         // The row itself still opens the mode picker (unchanged tap target/hint); the map tag below is

@@ -98,4 +98,47 @@ class CfmotoConnectRoutingTest {
         assertFalse(CfmotoConnect.isBleHotspot(q))
         assertEquals(TransportKind.SOFT_AP, ConnectionSpec.fromQr(q).mode)
     }
+
+    // --- THE ANDROID-AUTO GATE: a Rieju QR must NOT bypass the AA hand-off ---
+    // The `isBleHotspot` branch used to sit ABOVE every preferFactory/gateOnAaSteady guard, so
+    // `startAaConnect` (gateOnAaSteady = true) routed a Rieju into PhoneHotspotTransport and skipped the
+    // classic joinPhoneHotspot(..., gateOnAaSteady = true) -> BikeLink.markP2pReady deferral — the prober
+    // then raced AA video. Gated now exactly like the tether branch already was.
+
+    @Test fun `a Rieju QR routes to the factory BLE connector OFF the Android-Auto path`() {
+        assertTrue(CfmotoConnect.routesToBleHotspotConnector(qr(action = 128, modelId = RIEJU), gateOnAaSteady = false))
+    }
+
+    @Test fun `a Rieju QR does NOT route to the factory on the Android-Auto path (falls through to classic)`() {
+        assertFalse(CfmotoConnect.routesToBleHotspotConnector(qr(action = 128, modelId = RIEJU), gateOnAaSteady = true))
+    }
+
+    @Test fun `the AA gate does not change the answer for non-Rieju QRs (still classic on both paths)`() {
+        val zontes = qr(action = 128, modelId = null)
+        assertFalse(CfmotoConnect.routesToBleHotspotConnector(zontes, gateOnAaSteady = false))
+        assertFalse(CfmotoConnect.routesToBleHotspotConnector(zontes, gateOnAaSteady = true))
+    }
+
+    @Test fun `the AA gate is the ONLY difference from isBleHotspot (off-AA the two agree everywhere)`() {
+        val cases = listOf(
+            qr(action = 128, modelId = RIEJU),
+            qr(action = 0, modelId = RIEJU),
+            qr(action = 128, modelId = null),
+            qr(action = 128, modelId = "12345"),
+            qr(action = 128, ssid = "CFMOTO-9", pwd = "secret", modelId = RIEJU),
+            qr(action = 1, ssid = "CFMOTO", pwd = "12345678", mac = null, modelId = RIEJU),
+            qr(action = 8, ssid = "DIRECT-ab", modelId = RIEJU),
+        )
+        for (q in cases) {
+            assertEquals(
+                "off the AA path the gate must be transparent for ssid=" + q.ssid + " action=" + q.action,
+                CfmotoConnect.isBleHotspot(q),
+                CfmotoConnect.routesToBleHotspotConnector(q, gateOnAaSteady = false),
+            )
+            assertFalse(
+                "on the AA path nothing may reach the factory: ssid=" + q.ssid + " action=" + q.action,
+                CfmotoConnect.routesToBleHotspotConnector(q, gateOnAaSteady = true),
+            )
+        }
+    }
 }

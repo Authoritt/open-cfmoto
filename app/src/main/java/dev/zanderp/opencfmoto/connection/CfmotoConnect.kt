@@ -49,7 +49,9 @@ import dev.zanderp.opencfmoto.ConnectionState
 import dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory
 import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
+import dev.zanderp.opencfmoto.connection.factory.TransportKind
 import dev.zanderp.opencfmoto.connection.factory.isBleHotspotQr
+import dev.zanderp.opencfmoto.connection.factory.resolveWifiTransport
 
 /**
  * App-scoped owner of the CFMOTO connect + project trigger (bike Wi‑Fi join, PXC prober start,
@@ -77,10 +79,12 @@ object CfmotoConnect {
     // cockpit Conectar AND foreground/background auto-connect — passes `preferFactory = true` so it
     // routes SoftAP/P2P through [BikeConnectionFactory] WITH reconnect + teardown parity
     // (handle retained in [BikeConnectionHolder]; the `BikeLink.onWifiReacquired` fork drives re-establish;
-    // raised retry caps), scoped to the non-Android-Auto path. See `flip-work-design.md`. The Rieju
-    // phone-hotspot route ([isBleHotspot] below) goes through the factory INDEPENDENT of `preferFactory`;
-    // the OTHER phone-hotspot bikes (Zontes / opaque CARBIT tether) follow `preferFactory` like SoftAP/P2P —
-    // factory `TetherTransport` for the new cockpit, classic [joinPhoneHotspot] for the legacy/AA callers.
+    // FINITE retry caps for every connector, so a hopeless connect fails visibly instead of retrying in
+    // silence), scoped to the non-Android-Auto path. See `flip-work-design.md`. The Rieju phone-hotspot
+    // route ([routesToBleHotspotConnector] below) goes through the factory INDEPENDENT of `preferFactory`
+    // but NOT on the Android-Auto path; the OTHER phone-hotspot bikes (Zontes / opaque CARBIT tether)
+    // follow `preferFactory` like SoftAP/P2P — factory `TetherTransport` for the new cockpit, classic
+    // [joinPhoneHotspot] for the legacy/AA callers.
 
     /**
      * A phone-hosts-hotspot QR for a model that needs the factory's `PhoneHotspotTransport` (P2P group-owner +
@@ -91,6 +95,22 @@ object CfmotoConnect {
      * member because it IS this object's routing decision and `CfmotoConnectRoutingTest` guards it here.
      */
     internal fun isBleHotspot(qr: QrData): Boolean = isBleHotspotQr(qr)
+
+    /**
+     * Does [joinWifi] send this QR to the factory's Rieju BLE `PhoneHotspotTransport`?
+     *
+     * [isBleHotspot] alone is NOT the answer: the branch must also be OFF the Android-Auto path. It used to
+     * sit ABOVE every `preferFactory`/`gateOnAaSteady` guard, so `startAaConnect` (which calls
+     * `gateOnAaSteady = true`) routed a Rieju QR into the factory and thereby SKIPPED the classic
+     * `joinPhoneHotspot(..., gateOnAaSteady = true)` → `BikeLink.markP2pReady(...)` deferral — the prober
+     * then raced AA video instead of waiting for it. The factory implements no AA hand-off, so AA falls
+     * through to the classic tether flow exactly like the [TransportKind.TETHER] branch already does.
+     *
+     * Kept as a named `internal` member (like [isBleHotspot]) because it IS the routing decision, and
+     * `CfmotoConnectRoutingTest` guards it here without needing Android.
+     */
+    internal fun routesToBleHotspotConnector(qr: QrData, gateOnAaSteady: Boolean): Boolean =
+        !gateOnAaSteady && isBleHotspot(qr)
 
     /**
      * The process-global bike PXC client. Reuse [BikeLink.prober] if it already exists (e.g. the AA
@@ -227,9 +247,20 @@ object CfmotoConnect {
         // existing routing byte-for-byte. AUTO here also falls through unchanged — an explicit choice short-
         // circuits: all four connectors (spec.mode already forced by setConnectorChoice) go through
         // BikeConnectionFactory.
-        val choice = if (!gateOnAaSteady && preferFactory) BikeMemory.connectorChoice(context, qr.ssid) else ConnectorChoice.AUTO
+        val choice = if (!gateOnAaSteady && preferFactory) BikeMemory.connectorChoice(context, qr) else ConnectorChoice.AUTO
         when (choice) {
             ConnectorChoice.SOFT_AP, ConnectorChoice.P2P, ConnectorChoice.RIEJU_BLE, ConnectorChoice.TETHER -> {
+                // Both phone-hosts-the-network connectors need an Activity (BLE handoff / assist dialog +
+                // system tethering settings) — refuse headless with the SAME state + message the AUTO
+                // branches below set, so a background auto-connect on a pinned bike is explainable instead
+                // of dying inside the driver's foreground gate with no rider-visible reason.
+                if (activity == null &&
+                    (choice == ConnectorChoice.RIEJU_BLE || choice == ConnectorChoice.TETHER)
+                ) {
+                    LogBus.log("→ pinned '$choice' phone-hotspot bike can't auto-connect in the background — open the app to connect")
+                    ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
+                    return
+                }
                 LogBus.log("→ [FACTORY] joinWifi: rider-pinned '$choice' for '${qr.ssid}' → factory (spec.mode forced)")
                 val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
                 BikeConnectionHolder.set(conn)
@@ -243,9 +274,12 @@ object CfmotoConnect {
         if (qr.supportsPhoneHotspot && qr.pwd.isEmpty()) {
             // A BLE-capable phone-hotspot QR (Rieju/Carbit action=128 carrying a bm= mac) goes through the
             // NEW PhoneHotspotTransport (P2P group-owner + BLE B360 0x52 credential push, with a readable-
-            // creds manual fallback on BLE failure). INDEPENDENT of the dev toggle — the toggle gates ONLY the
-            // 450NK SoftAP/P2P classic path below, which stays byte-for-byte unchanged when it is OFF.
-            if (isBleHotspot(qr)) {
+            // creds manual fallback on BLE failure). INDEPENDENT of `preferFactory` — that flag gates ONLY the
+            // 450NK SoftAP/P2P classic path below, which stays byte-for-byte unchanged when it is OFF — but
+            // NOT of `gateOnAaSteady`: the factory implements no AA hand-off, so an Android-Auto connect must
+            // fall through to classic joinPhoneHotspot (which defers the probe via BikeLink.markP2pReady until
+            // AA video is steady). See [routesToBleHotspotConnector].
+            if (routesToBleHotspotConnector(qr, gateOnAaSteady)) {
                 if (activity == null) {
                     // Background can't create the P2P group or show the assist — mirror joinPhoneHotspot's guard.
                     LogBus.log("→ BLE phone-hotspot bike can't auto-connect in the background — open the app to connect")
@@ -295,26 +329,16 @@ object CfmotoConnect {
         }
         // AUTO: P2P when the QR is P2P-only (incl. non-DIRECT SSIDs — join by MAC), or DIRECT-*.
         // SoftAP fallback remains in joinWifiP2p.onFailed for SoftAP-capable units.
-        // Never force P2P when the QR is SoftAP-only (action bit3 clear) — Setup→P2P on those
-        // bikes only burns 25s then falls back (Benelli TRK / bj* SSIDs in the field).
-        val useP2p = when (transport) {
-            WifiTransport.P2P -> qr.supportsP2p || !qr.supportsAp
-            WifiTransport.AP -> false
-            WifiTransport.AUTO ->
-                (qr.supportsP2p && !qr.supportsAp) ||
-                    (qr.ssid.startsWith("DIRECT-", ignoreCase = true) &&
-                        (qr.supportsP2p || !qr.supportsAp))
-        }
-        // Per-bike memory refines AUTO only (an explicit P2P/AP setting is the rider's call): once a
-        // transport has produced a live link for THIS bike, use it and skip the dead path. Some dashes
-        // advertise DIRECT-* + SoftAP, so AUTO tries P2P first and burns the whole timeout on every
-        // connect even when P2P never forms a group on this phone, while SoftAP connects in seconds.
+        //
+        // The decision itself now lives in ONE pure function next to ConnectionSpec — `resolveWifiTransport`
+        // — which the FACTORY also calls (via ConnectionSpec.detectedAtPairing), so the two paths can never
+        // disagree about a bike again. This is a pure extraction: `useP2p` is the same expression with no
+        // memory applied (the function's `remembered = null` case), and `effUseP2p` is that expression
+        // refined by the per-bike winner. Per-bike memory refines AUTO only (an explicit P2P/AP setting is
+        // the rider's call), which is why `remembered` stays null unless the Setup preference is AUTO.
         val remembered = if (transport == WifiTransport.AUTO) BikeMemory.winningTransport(context, qr.ssid) else null
-        val effUseP2p = when {
-            remembered == "AP" && qr.supportsAp -> false
-            remembered == "P2P" && qr.supportsP2p -> true
-            else -> useP2p
-        }
+        val useP2p = resolveWifiTransport(qr, transport, remembered = null) == TransportKind.P2P
+        val effUseP2p = resolveWifiTransport(qr, transport, remembered) == TransportKind.P2P
         if (remembered != null && effUseP2p != useP2p) {
             LogBus.log("→ transport memory: '$remembered' connected before for '${qr.ssid}' — using it, skipping the dead path")
         }

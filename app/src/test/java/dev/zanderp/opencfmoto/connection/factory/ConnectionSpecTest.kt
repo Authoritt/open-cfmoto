@@ -61,6 +61,37 @@ class ConnectionSpecTest {
     @Test fun `action bit0 maps to SOFT_AP`() =
         assertEquals(TransportKind.SOFT_AP, ConnectionSpec.fromQr(qr(action = 1, ssid = "CFMOTO")).mode)
 
+    // --- §1c: two fromQr mis-mappings that sent real bikes to a connector that cannot work ---
+
+    @Test fun `a NON-DIRECT P2P-only QR maps to P2P — classic joins by MAC, SoftAP would have an empty PSK`() {
+        // The Voge-5G / ZT5G class: bit3 set, no AP bit, an ordinary SSID and no password. Mapping it to
+        // SOFT_AP handed SoftApTransport an empty PSK — a guaranteed failure — while classic joins Wi-Fi
+        // Direct by MAC.
+        assertEquals(TransportKind.P2P, ConnectionSpec.fromQr(qr(action = 8, ssid = "ZT5G-1234")).mode)
+        assertEquals(TransportKind.P2P, ConnectionSpec.fromQr(qr(action = 8, ssid = "Voge-5G-77")).mode)
+    }
+
+    @Test fun `a P2P bit alongside a normal AP ssid still maps to SOFT_AP`() {
+        // Regression guard for the clause above: bit3 + bit0 with a non-DIRECT ssid is a SoftAP bike.
+        assertEquals(
+            TransportKind.SOFT_AP,
+            ConnectionSpec.fromQr(qr(action = 9, ssid = "CFMOTO-166B50")).mode,
+        )
+    }
+
+    @Test fun `the DIRECT- prefix is matched case-insensitively (classic's exact form)`() {
+        // Was `startsWith("DIRECT")`, case-SENSITIVE: a lowercase-DIRECT dash that advertises both P2P and
+        // SoftAP fell to SOFT_AP here while classic went P2P — the two paths disagreeing about one bike.
+        assertEquals(
+            TransportKind.P2P,
+            ConnectionSpec.fromQr(qr(action = 9, ssid = "direct-go-CFMOTO-0CDC0B")).mode,
+        )
+        assertEquals(
+            TransportKind.P2P,
+            ConnectionSpec.fromQr(qr(action = 9, ssid = "DIRECT-go-CFMOTO-0CDC0B")).mode,
+        )
+    }
+
     @Test fun `bit7 QR carrying a SoftAP password maps to SOFT_AP (matches classic pwd-empty gate)`() {
         // A bit7 dash that ALSO advertises a password is a SoftAP bike classically (CfmotoConnect gates
         // phone-hotspot on supportsPhoneHotspot && pwd.isEmpty()); the persisted spec must agree, not diverge.

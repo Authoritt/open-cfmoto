@@ -12,6 +12,7 @@ import dev.zanderp.opencfmoto.PhoneHotspotAssist
 import dev.zanderp.opencfmoto.PhoneHotspotScan
 import dev.zanderp.opencfmoto.QrData
 import dev.zanderp.opencfmoto.R
+import dev.zanderp.opencfmoto.WifiGate
 import dev.zanderp.opencfmoto.connection.factory.BikeEndpoint
 import dev.zanderp.opencfmoto.connection.factory.BikeTransport
 import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
@@ -61,8 +62,8 @@ import kotlinx.coroutines.withContext
  * [DefaultBikeConnection][dev.zanderp.opencfmoto.connection.factory.DefaultBikeConnection] gates the headless
  * auto-connect before [open] is ever called; [open] re-checks defensively and throws "needs foreground".
  *
- * **Retries.** The driver may re-`open()` this same instance (TETHER keeps the DEFAULT finite retry caps —
- * an interactive, foreground, one-shot flow, not a daily-ride infinite-retry path). The rider-facing assist
+ * **Retries.** The driver may re-`open()` this same instance (finite retry caps, like every other connector —
+ * a hopeless connect must fail visibly, never retry in silence). The rider-facing assist
  * runs ONCE per connection: on a retry the creds are already typed and persisted, and re-popping a modal over
  * a rider who is probably standing IN the system hotspot settings would be pure noise — the retry silently
  * re-runs the discovery, which is exactly what a rider still flipping the hotspot on needs.
@@ -123,6 +124,9 @@ class TetherTransport : BikeTransport {
         )
 
         val bindIp: Inet4Address = subnet.localAddress
+        // Mirrors classic startPhoneHotspotScan's success path: drop any "turn Wi-Fi on" notification the
+        // WifiGate posted, so a stale one can't outlive a tether connect that plainly worked.
+        runCatching { WifiGate.cancelNotification(appCtx) }
         log("→ hotspot peer ${peer.hostAddress}; bind=${bindIp.hostAddress} (EasyConn PXC next)")
 
         return BikeEndpoint(

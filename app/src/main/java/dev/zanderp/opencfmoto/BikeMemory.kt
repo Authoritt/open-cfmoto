@@ -6,7 +6,7 @@ import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
 import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
 import dev.zanderp.opencfmoto.connection.factory.bikeIdFor
-import dev.zanderp.opencfmoto.connection.factory.fromQr
+import dev.zanderp.opencfmoto.connection.factory.detectedAtPairing
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -47,10 +47,14 @@ object BikeMemory {
     // (QR mac, else ssid — see ConnectionSpec.bikeIdFor). Task 8.
     private const val KEY_SPEC_PREFIX = "spec_"
 
-    // Per-bike rider-chosen connection MECHANISM override (ConnectorChoice.name), keyed by the (stable)
-    // dash SSID like the mode/transport indexes. Absent/blank ⇒ AUTO (the app detects it) — so existing
-    // bikes behave exactly as today. An explicit choice is ALSO mirrored into KEY_SPEC_PREFIX's spec.mode
-    // (see setConnectorChoice) because the factory selects the transport by spec.mode.
+    // Per-bike rider-chosen connection MECHANISM override (ConnectorChoice.name), keyed by
+    // ConnectionSpec.bikeIdFor (QR mac, else ssid) — the SAME key as the spec index, NOT the ssid.
+    // Why: phone-hotspot QRs (Rieju / Zontes / opaque CARBIT) frequently carry NO ssid at all
+    // (QrData.supportsPhoneHotspot even has an `ssid.isBlank() && mac != null` clause), so an ssid-keyed
+    // index silently wrote nothing on exactly the bikes with the newest, least-proven connectors — killing
+    // the picker AND the help sheet's "try another connector" escape hatch for them. Absent/blank ⇒ AUTO
+    // (the app detects it). An explicit choice is ALSO mirrored into KEY_SPEC_PREFIX's spec.mode (see
+    // setConnectorChoice) because the factory selects the transport by spec.mode.
     private const val KEY_CONNECTOR_PREFIX = "connector_"
 
     private fun prefs(ctx: Context) =
@@ -94,9 +98,32 @@ object BikeMemory {
         // Config-ownership §2: "the mode is set at Scan, stored in the spec". Seed a fresh bike's
         // ConnectionSpec here (the chokepoint every scan/pairing flow already calls) so the Garage fast
         // path has data on the very next connect — never overwrite an existing spec (would erase a
-        // refined mode/lastEndpointHint/defaultMapProvider a prior connect or the Garage already saved).
-        if (specFor(ctx, qr) == null) saveSpec(ctx, ConnectionSpec.fromQr(qr))
+        // refined mode/lastEndpointHint/defaultMapProvider a prior connect or the Garage already saved,
+        // and would silently stomp a rider's PIN, which always writes a spec).
+        //
+        // The connector is DECIDED ONCE, HERE, and persisted: `detectedAtPairing` is the same decision the
+        // classic path makes at connect time — the QR family, refined by the rider's Setup preference and
+        // this bike's learned winner (`winningTransport`, which refines AUTO only, exactly as classic does).
+        // A bare `fromQr` used to be stored instead, which is how a DIRECT-* bike whose P2P never forms on
+        // this phone (learned winner "AP") kept being sent to the P2P connector on every ride.
+        if (specFor(ctx, qr) == null) saveSpec(ctx, autoDetectedSpec(ctx, qr))
     }
+
+    /**
+     * What auto-detection says for [qr] on THIS phone right now: the QR family, refined by the rider's Setup
+     * preference and this bike's learned winner — i.e. exactly the connector `AUTO` resolves to
+     * ([ConnectionSpec.detectedAtPairing]; `BikeConnectionFactory.reconcileStoredMode` re-derives the same
+     * value at connect time). [save] persists it as the pairing decision, and the Garage/Scan pickers show
+     * [autoDetectedMode] as their "detected: …" hint — so the hint cannot drift from what actually happens.
+     */
+    fun autoDetectedSpec(ctx: Context, qr: QrData): ConnectionSpec {
+        val pref = AppSettings.transport(ctx)
+        val remembered = if (pref == WifiTransport.AUTO) winningTransport(ctx, qr.ssid) else null
+        return ConnectionSpec.detectedAtPairing(qr, pref, remembered)
+    }
+
+    /** The connector `AUTO` resolves to for [qr] — see [autoDetectedSpec]. */
+    fun autoDetectedMode(ctx: Context, qr: QrData): TransportKind = autoDetectedSpec(ctx, qr).mode
 
     fun select(ctx: Context, raw: String) {
         prefs(ctx).edit().putString(KEY_SELECTED, raw).apply()
@@ -210,17 +237,26 @@ object BikeMemory {
     }
 
     /**
-     * The rider's per-bike connection-mechanism override for [ssid], or [ConnectorChoice.AUTO] (the
-     * default) when never set / blank ssid / a corrupt value. Read on the connect hot path
-     * (`CfmotoConnect.joinWifi`) with the QR's own ssid, so it stays keyed by ssid like [bikeMode] /
-     * [winningTransport]. AUTO ⇒ the existing auto-detect path runs byte-for-byte.
+     * The rider's per-bike connection-mechanism override for the bike [qr] identifies, or
+     * [ConnectorChoice.AUTO] (the default) when never set / no stable id / a corrupt value. Read on the
+     * connect hot path (`CfmotoConnect.joinWifi`, `BikeConnectionFactory.create`) with the same
+     * [ConnectionSpec.bikeIdFor] key [setConnectorChoice] writes — mac when the QR has one, else ssid — so a
+     * blank-ssid phone-hotspot bike can hold a pin like any other. AUTO ⇒ the auto-detect path runs
+     * byte-for-byte.
      */
-    fun connectorChoice(ctx: Context, ssid: String): ConnectorChoice = connectorChoice(prefs(ctx), ssid)
+    fun connectorChoice(ctx: Context, qr: QrData): ConnectorChoice = connectorChoice(prefs(ctx), qr)
 
     /** [SharedPreferences]-direct core of [connectorChoice] (test seam; see [specFor]'s KDoc). */
-    internal fun connectorChoice(prefs: SharedPreferences, ssid: String): ConnectorChoice {
-        if (ssid.isBlank()) return ConnectorChoice.AUTO
-        val raw = prefs.getString("$KEY_CONNECTOR_PREFIX$ssid", null) ?: return ConnectorChoice.AUTO
+    internal fun connectorChoice(prefs: SharedPreferences, qr: QrData): ConnectorChoice {
+        val id = ConnectionSpec.bikeIdFor(qr)
+        if (id.isBlank()) return ConnectorChoice.AUTO
+        // Legacy fallback: builds before the key moved to bikeIdFor wrote `connector_<ssid>`. Reading it
+        // keeps a pin a rider already made from silently reverting to AUTO on upgrade (same value, older
+        // key); for a mac-less QR the two keys are identical anyway, so this only fires for mac'd bikes.
+        val raw = prefs.getString("$KEY_CONNECTOR_PREFIX$id", null)
+            ?: qr.ssid.takeIf { it.isNotBlank() && it != id }
+                ?.let { prefs.getString("$KEY_CONNECTOR_PREFIX$it", null) }
+            ?: return ConnectorChoice.AUTO
         return runCatching { ConnectorChoice.valueOf(raw) }.getOrDefault(ConnectorChoice.AUTO)
     }
 
@@ -230,30 +266,44 @@ object BikeMemory {
      * reflected into the stored [ConnectionSpec.mode] (what `BikeConnectionFactory.selectTransport` reads):
      * SOFT_AP→SOFT_AP, P2P→P2P, RIEJU_BLE→PHONE_HOTSPOT, TETHER→TETHER, reusing the bike's existing spec so a
      * learned `lastEndpointHint`/`defaultMapProvider` survives. AUTO clears the override by resetting
-     * `spec.mode` back to the QR-derived guess ([ConnectionSpec.fromQr]) so detection runs fresh again. The
-     * connector index itself stays keyed by ssid (blank ssid ⇒ no-op, exactly like [setBikeMode]).
+     * `spec.mode` back to what auto-detection says today ([ConnectionSpec.detectedAtPairing], the pairing
+     * decision) so detection runs fresh again.
+     *
+     * The connector index is keyed by [ConnectionSpec.bikeIdFor] — the QR mac when there is one, else the
+     * ssid — NOT by the ssid. It used to be ssid-keyed and bail out on a blank one, which made the picker a
+     * silent no-op on precisely the phone-hotspot bikes (Rieju / Zontes / opaque `CARBIT`) whose QRs
+     * routinely carry no ssid at all. No stable id at all (no mac AND no ssid) is still a no-op — there is
+     * nothing to key by.
      */
     fun setConnectorChoice(ctx: Context, qr: QrData, choice: ConnectorChoice) =
         setConnectorChoice(prefs(ctx), qr, choice)
 
     /** [SharedPreferences]-direct core of [setConnectorChoice] (test seam; see [specFor]'s KDoc). */
     internal fun setConnectorChoice(prefs: SharedPreferences, qr: QrData, choice: ConnectorChoice) {
-        val ssid = qr.ssid
-        if (ssid.isBlank()) return
-        prefs.edit().putString("$KEY_CONNECTOR_PREFIX$ssid", choice.name).apply()
+        val id = ConnectionSpec.bikeIdFor(qr)
+        if (id.isBlank()) return
+        prefs.edit().putString("$KEY_CONNECTOR_PREFIX$id", choice.name).apply()
         // Reflect the choice in spec.mode so the factory picks the forced transport. All four connectors
         // force their transport (TETHER included, now that it is a real TransportKind with its own factory
-        // transport); AUTO resets to the fromQr guess to genuinely clear a prior override.
+        // transport); AUTO resets to the auto-detected mode to genuinely clear a prior override.
         val forcedMode: TransportKind = when (choice) {
             ConnectorChoice.SOFT_AP -> TransportKind.SOFT_AP
             ConnectorChoice.P2P -> TransportKind.P2P
             ConnectorChoice.RIEJU_BLE -> TransportKind.PHONE_HOTSPOT
             ConnectorChoice.TETHER -> TransportKind.TETHER
-            ConnectorChoice.AUTO -> ConnectionSpec.fromQr(qr).mode
+            ConnectorChoice.AUTO -> autoDetected(prefs, qr).mode
         }
-        val base = specFor(prefs, qr) ?: ConnectionSpec.fromQr(qr)
+        val base = specFor(prefs, qr) ?: autoDetected(prefs, qr)
         saveSpec(prefs, base.copy(mode = forcedMode))
     }
+
+    /**
+     * What auto-detection says for [qr] right now, using this bike's learned winner (the rider's Setup
+     * preference is not reachable through a bare [SharedPreferences] seam, so AUTO is assumed — the same
+     * assumption the Garage/Scan pickers make when they show the "detected" hint).
+     */
+    private fun autoDetected(prefs: SharedPreferences, qr: QrData): ConnectionSpec =
+        ConnectionSpec.detectedAtPairing(qr, WifiTransport.AUTO, winningTransport(prefs, qr.ssid))
 
     // ---- convenience accessors used across the app (selected bike) ----
     fun lastRaw(ctx: Context): String? = selected(ctx)?.raw

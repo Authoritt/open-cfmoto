@@ -118,6 +118,9 @@ internal fun reduce(cur: ConnState, ev: ConnEvent): ConnState = when (ev) {
  *   free of the outer app's persistence singleton and this behavior stays unit-testable without Android
  *   (default no-op keeps every existing test call site compiling unchanged).
  *   [BikeConnectionFactory.create] wires the real `memory.saveSpec(ctx, _)`.
+ * @param alternative the connector worth RECOMMENDING if this one fails ([suggestAlternativeConnector],
+ *   computed once by [BikeConnectionFactory.create] from the QR). Rides on every terminal
+ *   [ConnState.Error]; this class never acts on it — there is no cascade, by design.
  */
 class DefaultBikeConnection(
     private val transport: BikeTransport,
@@ -129,6 +132,7 @@ class DefaultBikeConnection(
     private val flapWindowNs: Long = FLAP_WINDOW_NS,
     private val flapMaxFailures: Int = FLAP_MAX_FAILURES,
     private val onConnected: (ConnectionSpec) -> Unit = {},
+    private val alternative: ConnectorChoice? = null,
 ) : BikeConnection {
 
     private val _state = MutableStateFlow<ConnState>(ConnState.Idle)
@@ -178,7 +182,7 @@ class DefaultBikeConnection(
             if ((spec.mode == TransportKind.PHONE_HOTSPOT || spec.mode == TransportKind.TETHER) &&
                 io.activityOrNull() == null
             ) {
-                _state.value = ConnState.Error("needs foreground", recoverable = false)
+                _state.value = ConnState.Error("needs foreground", recoverable = false, alternative = alternative)
                 return
             }
 
@@ -201,8 +205,12 @@ class DefaultBikeConnection(
      * `BikeConnectionHolder`/`BikeLink.onWifiReacquired`: stash the fresh [network] and enqueue a
      * [ConnEvent.LinkDropped] so the driver re-establishes the LINK on it (transport kept up). Safe with no
      * live driver — the event lands in the UNLIMITED channel and is drained on the next `supervise()` (or GC'd
-     * with it); the `@Volatile` write is last-write-wins. The raised SoftAP/P2P caps keep the driver — and
-     * thus this event's receiver — alive across a long outage so a later re-acquire always recovers (design §2).
+     * with it); the `@Volatile` write is last-write-wins.
+     *
+     * The driver's retry caps are FINITE for every transport kind ([BikeConnectionFactory.retryCapsFor]), so a
+     * long-enough outage ends the driver and this event then has no receiver — deliberate: a connection that
+     * cannot come back must fail visibly (terminal [ConnState.Error], which the legacy `ConnectionState` now
+     * mirrors so auto-connect is re-armed) instead of retrying invisibly forever.
      */
     override fun onWifiReacquired(network: Network?) {
         reacquiredNetwork.set(network)
@@ -277,7 +285,7 @@ class DefaultBikeConnection(
                     val why =
                         if (unstable) "connection unstable ($windowFailures drops within ${flapWindowNs / 1_000_000_000}s)"
                         else "connection failed after $attempt attempts"
-                    fatal = ConnState.Error(why, recoverable = false)
+                    fatal = ConnState.Error(why, recoverable = false, alternative = alternative)
                     return // -> finally: teardown + publish Error
                 }
 

@@ -65,8 +65,6 @@ import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.ManualWifiPairing
 import dev.zanderp.opencfmoto.QrData
-import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
-import dev.zanderp.opencfmoto.connection.factory.fromQr
 import dev.zanderp.opencfmoto.ui.components.GhostButton
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.connection.ConnectorChoiceDialog
@@ -212,8 +210,10 @@ fun ScanScreen(nav: NavController) {
 
         // Connection confirm/override: show the detected connector and let the rider pin one before leaving.
         pairedQr?.let { qr ->
-            val current = remember(connectorRefresh) { BikeMemory.connectorChoice(ctx, qr.ssid) }
-            val detected = remember(qr) { ConnectionSpec.fromQr(qr).mode }
+            val current = remember(connectorRefresh) { BikeMemory.connectorChoice(ctx, qr) }
+            // The connector AUTO really resolves to (QR + Setup preference + this bike's learned winner) —
+            // the same value BikeMemory.save just persisted as the pairing decision, not the bare QR guess.
+            val detected = remember(qr, connectorRefresh) { BikeMemory.autoDetectedMode(ctx, qr) }
             val affordance = connectorRowLabel(current, detected)
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
@@ -242,8 +242,8 @@ fun ScanScreen(nav: NavController) {
             pairedQr?.let { qr ->
                 ConnectorChoiceDialog(
                     bikeName = qr.name?.takeIf { it.isNotBlank() } ?: qr.ssid,
-                    current = BikeMemory.connectorChoice(ctx, qr.ssid),
-                    detected = ConnectionSpec.fromQr(qr).mode,
+                    current = BikeMemory.connectorChoice(ctx, qr),
+                    detected = BikeMemory.autoDetectedMode(ctx, qr),
                     onPick = { picked ->
                         BikeMemory.setConnectorChoice(ctx, qr, picked)
                         connectorRefresh++

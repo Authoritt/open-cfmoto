@@ -58,7 +58,19 @@ sealed interface ConnState {
     data class Connecting(val phase: Phase, val detail: String? = null) : ConnState
     data class Connected(val endpoint: BikeEndpoint) : ConnState
     data class Retrying(val reason: String, val nextInMs: Long) : ConnState
-    data class Error(val reason: String, val recoverable: Boolean) : ConnState
+
+    /**
+     * Terminal failure. [alternative] is the OTHER connector worth recommending to the rider for this bike
+     * ([suggestAlternativeConnector]), or null when there is none — advice only: nothing in this package
+     * ever switches to it. The connector is decided once at pairing and used verbatim; a failure is bounded
+     * and visible rather than a silent cascade (which is what makes connecting slow). Defaults to null so
+     * every existing construction site and test is unaffected.
+     */
+    data class Error(
+        val reason: String,
+        val recoverable: Boolean,
+        val alternative: ConnectorChoice? = null,
+    ) : ConnState
 }
 
 /** App-facing handle to a bike connection: observe [state], drive it with [connect]/[disconnect]. */
