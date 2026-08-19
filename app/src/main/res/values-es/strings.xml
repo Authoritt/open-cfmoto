@@ -753,6 +753,9 @@
     <string name="ovk_scan_qr_unknown">Ese QR no es de una moto compatible. Busca el QR de emparejamiento en la pantalla del tablero.</string>
     <string name="ovk_scan_qr_none_in_photo">No se encontró ningún QR en la imagen.</string>
     <string name="ovk_scan_done">Listo</string>
+    <!-- Paso de conexión del escaneo: los conectores se ven aquí, no se esconden, porque es aquí donde se
+         arregla una conexión fallida (elige otro y vuelve a tocar Conectar). -->
+    <string name="ovk_scan_how_it_connects">Cómo se conecta</string>
     <!-- settings screen -->
     <string name="ovk_settings_title">Ajustes</string>
     <string name="ovk_settings_group_connection">Conexión</string>

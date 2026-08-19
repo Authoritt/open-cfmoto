@@ -4,9 +4,6 @@
 // mode (CFMOTO → the built-in map; Android Auto → the classic hub). No mode switch clutters the dash.
 package dev.zanderp.opencfmoto.ui.dashboard
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,7 +26,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -48,13 +44,9 @@ import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.AppSettings
 import dev.zanderp.opencfmoto.BikeMemory
-import dev.zanderp.opencfmoto.ConnectionState
 import dev.zanderp.opencfmoto.ControlsActivity
 import dev.zanderp.opencfmoto.GpxSession
-import dev.zanderp.opencfmoto.Phase
-import dev.zanderp.opencfmoto.connection.BikeConnectionHolder
 import dev.zanderp.opencfmoto.connection.CfmotoConnect
-import dev.zanderp.opencfmoto.connection.factory.ConnState
 import dev.zanderp.opencfmoto.HudViewActivity
 import dev.zanderp.opencfmoto.QrScanActivity
 import dev.zanderp.opencfmoto.TripsListActivity
@@ -69,18 +61,10 @@ import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.components.PrimaryButton
 import dev.zanderp.opencfmoto.ui.components.StatusKind
 import dev.zanderp.opencfmoto.ui.components.Tile
-import dev.zanderp.opencfmoto.ui.components.kind
+import dev.zanderp.opencfmoto.ui.connection.findActivity
+import dev.zanderp.opencfmoto.ui.connection.rememberConnectionStatus
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-
-// LocalContext inside CockpitActivity's setContent is the Activity today, but unwrap defensively so a
-// future ContextThemeWrapper / @Preview / ComposeView host can't crash Conectar with a hard cast.
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
 
 @Composable
 fun DashboardScreen(nav: NavController) {
@@ -88,52 +72,15 @@ fun DashboardScreen(nav: NavController) {
     val ctx = LocalContext.current
     val store = remember { SettingsStore(ctx.applicationContext) }
     val scope = rememberCoroutineScope()
-    val snap by ConnectionState.flow.collectAsStateWithLifecycle()
-    // The connection factory (the cockpit's own connect, preferFactory=true) drives its OWN ConnState during the
-    // PRE-projection phases — while the classic ConnectionState is still parked at JOINING_WIFI. Observe it
-    // reactively (null when no factory connection is live) so the gauge shows real Conectando…/Reconectando…/Error
-    // detail; once the prober flips ConnectionState to STREAMING/MIRRORING (or a classic terminal state) the phase
-    // label is authoritative again and wins.
-    val factoryConn by BikeConnectionHolder.connectionFlow.collectAsStateWithLifecycle()
-    val factoryState by produceState<ConnState?>(initialValue = null, factoryConn) {
-        value = null
-        factoryConn?.state?.collect { value = it }
-    }
+    // ONE reading of the connection for the whole cockpit (ui/connection/ConnectionStatus.kt): the gauge
+    // here and Scan's Conectar narrate the same connect, so the rules live in one place instead of being
+    // copied into every screen that shows them — that is how two screens end up disagreeing on air.
+    val status = rememberConnectionStatus()
+    val kind = status.kind
+    val statusText = status.text
     val autoOn by store.autoConnect.collectAsStateWithLifecycle(initialValue = false)
     val prompted by store.autoConnectPrompted.collectAsStateWithLifecycle(initialValue = false)
     val provider by store.mapProvider.collectAsStateWithLifecycle(initialValue = MapProvider.BUILTIN)
-    // Projection live (or a classic terminal state) → the ConnectionState phase is authoritative; otherwise
-    // the factory's pre-projection ConnState wins (Idle/none falls through to the phase label).
-    val projecting = snap.phase == Phase.STREAMING || snap.phase == Phase.MIRRORING ||
-        snap.phase == Phase.ERROR || snap.phase == Phase.STOPPED
-    // …with ONE exception: a factory Error/Retrying always wins, because the legacy phase cannot express
-    // either of them. Without this, the terminal Error is mirrored into Phase.ERROR (so auto-connect
-    // re-arms), `projecting` flips true, and the actionable reason ("…escanea el QR otra vez") collapses to
-    // a bare "Error — see logs"; and a mid-ride drop would keep showing STREAMING instead of "Reconectando
-    // 1/3" while the driver retries the SAME connector.
-    val factoryOverrides = factoryState is ConnState.Error || factoryState is ConnState.Retrying
-    val fs = factoryState?.takeIf { (factoryOverrides || !projecting) && it != ConnState.Idle }
-    val kind = when (fs) {
-        is ConnState.Error -> StatusKind.FAULT
-        is ConnState.Connected -> StatusKind.LIVE
-        is ConnState.Connecting, is ConnState.Retrying -> StatusKind.BUSY
-        else -> snap.phase.kind()
-    }
-    // The generic "Error — see logs" label is only a fallback: whenever we have a real reason (the factory's
-    // ConnState.Error, or ConnectionState.detail — which the classic path fills too, e.g. the prober's
-    // "lost bike link", and which the factory mirror fills with the very same reason) THAT is what the rider
-    // needs to read, in full, unabbreviated: it is the actionable part ("…escanea el QR otra vez para
-    // actualizar el garaje"). The gauge colour already says "fault", so the label does not repeat it.
-    val errorLabel = stringResource(R.string.conn_error)
-    fun errorText(reason: String): String = reason.ifBlank { errorLabel }
-    val statusText = when (fs) {
-        is ConnState.Connecting -> stringResource(R.string.conn_joining_wifi)
-        is ConnState.Connected -> stringResource(R.string.conn_pxc_connecting)
-        // Bounded, rider-visible reconnect on the SAME connector: "Reconectando 1/3".
-        is ConnState.Retrying -> stringResource(R.string.ovk_conn_reconnecting_n, fs.attempt, fs.maxAttempts)
-        is ConnState.Error -> errorText(fs.reason)
-        else -> if (snap.phase == Phase.ERROR) errorText(snap.detail) else stringResource(snap.phase.labelRes)
-    }
     val bikeName = remember { BikeMemory.lastBikeName(ctx) ?: ctx.getString(R.string.ovk_no_bike_paired) }
     val hasBike = remember { BikeMemory.lastQr(ctx) != null }
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -105,6 +106,58 @@ val CONNECTOR_OPTIONS: List<ConnectorChoice> = listOf(
     ConnectorChoice.BLE,
     ConnectorChoice.HOTSPOT,
 )
+
+/**
+ * The connectors as a row of CHIPS — the same [CONNECTOR_OPTIONS], visible without opening anything.
+ *
+ * The Garage's dialog is for changing a setting later; Scan needs the options in front of the rider,
+ * because that is where a failed connect gets fixed: pick another mechanism, press Conectar again. A
+ * mechanism hidden behind a dropdown at the exact moment a connection just failed is a mechanism the rider
+ * will never try.
+ *
+ * [enabled] false greys the chips while an attempt is in flight — changing the connector mid-connect would
+ * make the result mean nothing.
+ */
+@Composable
+fun ConnectorChips(
+    current: ConnectorChoice,
+    enabled: Boolean = true,
+    onPick: (ConnectorChoice) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        for (option in CONNECTOR_OPTIONS) {
+            ConnectorChip(
+                label = connectorShortLabel(option),
+                selected = option == current,
+                enabled = enabled,
+                onClick = { onPick(option) },
+            )
+        }
+    }
+}
+
+/** One chip of [ConnectorChips]: the mechanism's name, lit when it is the current choice. */
+@Composable
+private fun ConnectorChip(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    val fg = when {
+        !enabled -> c.inkFaint
+        selected -> c.ignition
+        else -> c.inkDim
+    }
+    val bg = if (selected) c.ignition.copy(alpha = 0.14f) else c.surface1
+    val bd = if (selected) c.ignition.copy(alpha = 0.45f) else c.line
+    Box(
+        Modifier.clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .border(1.dp, bd, RoundedCornerShape(999.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+    ) { Text(label, color = fg, fontWeight = FontWeight.SemiBold, fontSize = 12.sp) }
+}
 
 /**
  * Per-bike connection-mechanism picker. [current] highlights today's choice; [detected] is

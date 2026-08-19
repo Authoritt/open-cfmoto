@@ -773,6 +773,9 @@
     <string name="ovk_scan_qr_unknown">That QR isn\'t from a compatible bike. Look for the pairing QR on the dash screen.</string>
     <string name="ovk_scan_qr_none_in_photo">No QR found in that image.</string>
     <string name="ovk_scan_done">Done</string>
+    <!-- Scan's connect step: the connectors are shown here, not hidden, because this is where a failed
+         connect gets fixed (pick another, press Connect again). -->
+    <string name="ovk_scan_how_it_connects">How it connects</string>
     <!-- settings screen -->
     <string name="ovk_settings_title">Settings</string>
     <string name="ovk_settings_group_connection">Connection</string>

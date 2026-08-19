@@ -2,10 +2,16 @@
 // Scan — CameraX + ML Kit QR scanner as a Compose screen, styled to the cockpit mockup: corner
 // reticle, zoom, scan-from-photo, manual Wi-Fi entry. A valid dash QR pairs the bike; a code we cannot
 // use SAYS SO (it used to fail in complete silence) and scanning simply carries on.
+//
+// Scanning is also where a connector is PROVEN. A pairing that only writes the bike to memory has
+// guaranteed nothing — the rider finds out on the road. So the scan ends with the mechanisms in plain
+// sight and a Conectar that runs the very same path the dashboard runs; only a link that actually forms
+// gets pinned as this bike's connector and sends the rider on.
 package dev.zanderp.opencfmoto.ui.scan
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.SystemClock
@@ -66,14 +72,24 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.BikeMemory
+import dev.zanderp.opencfmoto.GpxSession
 import dev.zanderp.opencfmoto.ManualWifiPairing
 import dev.zanderp.opencfmoto.QrData
+import dev.zanderp.opencfmoto.connection.CfmotoConnect
+import dev.zanderp.opencfmoto.connection.factory.ConnState
+import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
+import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.ui.Routes
 import dev.zanderp.opencfmoto.ui.components.GhostButton
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
-import dev.zanderp.opencfmoto.ui.connection.ConnectorChoiceDialog
+import dev.zanderp.opencfmoto.ui.components.PrimaryButton
+import dev.zanderp.opencfmoto.ui.components.StatusKind
+import dev.zanderp.opencfmoto.ui.connection.ConnectorChips
 import dev.zanderp.opencfmoto.ui.connection.ConnectorHelpButton
 import dev.zanderp.opencfmoto.ui.connection.ConnectorHelpDialog
-import dev.zanderp.opencfmoto.ui.connection.connectorRowLabel
+import dev.zanderp.opencfmoto.ui.connection.connectorDescription
+import dev.zanderp.opencfmoto.ui.connection.findActivity
+import dev.zanderp.opencfmoto.ui.connection.rememberConnectionStatus
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -120,12 +136,26 @@ fun ScanScreen(nav: NavController) {
     val executor = remember { Executors.newSingleThreadExecutor() }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var zoom by remember { mutableStateOf(1f) }
-    // After a successful scan we surface the DETECTED connector + an override picker before leaving (the
-    // durable home for this is the Garage). Null = still scanning → the scan controls show as before.
+    // After a successful scan the screen turns into the connect step: the bike, every mechanism in plain
+    // sight, and Conectar. Null = still scanning → the scan controls show as before.
     var pairedQr by remember { mutableStateOf<QrData?>(null) }
-    var showConnectorPicker by remember { mutableStateOf(false) }
     var showConnectorHelp by remember { mutableStateOf(false) }
     var connectorRefresh by remember { mutableStateOf(0) }
+    // The live connection, read exactly as the dashboard gauge reads it (ui/connection/ConnectionStatus.kt):
+    // Conectando… / Reconectando n/3 / the real failure reason, in the same words as the cockpit.
+    val status = rememberConnectionStatus()
+    // The connector THIS tap is proving; non-null = an attempt is in flight. One attempt per tap: nothing
+    // here ever retries by itself, and nothing ever switches to a different connector behind the rider's
+    // back — a connector that silently substitutes another is exactly what makes a failure unexplainable.
+    var attempt by remember { mutableStateOf<ConnectorChoice?>(null) }
+    // True from the tap until the connect is SEEN to start (a busy reading). Until then, whatever is on the
+    // connection right now belongs to the PREVIOUS attempt, and both stale readings lie in opposite
+    // directions: a link still up from the dashboard would be read as proof that THIS connector works, and
+    // the error left by the attempt that just failed would be read as this one failing before it began.
+    // (The state flows arrive a frame late, so both are reachable on the very tap that starts the connect.)
+    var awaitingStart by remember { mutableStateOf(false) }
+    // The reason the last attempt failed, kept on screen with the options so the next tap is an informed one.
+    var failure by remember { mutableStateOf<String?>(null) }
     DisposableEffect(Unit) { onDispose { executor.shutdown(); runCatching { scanner.close() } } }
 
     fun onQr(raw: String) {
@@ -141,6 +171,65 @@ fun ScanScreen(nav: NavController) {
             handled.set(false)
         }
     }
+    /** Leave for the cockpit — back to the dashboard already on the stack, or straight to it. */
+    fun leaveToDashboard() {
+        if (!nav.popBackStack(Routes.DASHBOARD, false)) nav.navigate(Routes.DASHBOARD)
+    }
+
+    // If the connect never even STARTS — the phone's Wi-Fi is off and Android is asking about it, so the
+    // flow returns before touching the connection state — don't leave the rider staring at "Conectando…"
+    // forever: fall back to the Conectar button so a second tap is possible. Not a retry: nothing reconnects
+    // on its own, the rider decides.
+    LaunchedEffect(attempt, awaitingStart) {
+        if (attempt != null && awaitingStart) {
+            delay(CONNECT_START_TIMEOUT_MS)
+            if (awaitingStart) attempt = null
+        }
+    }
+
+    // Run the connect. Deliberately NOT a new connection path: prepareFreeRide + startCfmotoMap with
+    // preferFactory = true is exactly what the dashboard's Conectar does, so whatever the rider proves here
+    // is what will happen on the road. The connector was already persisted when they tapped its chip, so the
+    // factory picks it up from the bike's stored spec.
+    fun connectNow(qr: QrData) {
+        val activity = ctx.findActivity() ?: return
+        failure = null
+        awaitingStart = true
+        attempt = BikeMemory.connectorChoice(ctx, qr)
+        GpxSession.prepareFreeRide()
+        CfmotoConnect.startCfmotoMap(activity, preferFactory = true)
+    }
+
+    // The outcome of the attempt in flight. `linkUp` — not the gauge's colour — is what counts as proof
+    // (see ConnectionStatus.linkUp: startCfmotoMap marks "projecting to the dash" before it has joined
+    // anything, so the colour turns green a millisecond after the tap with nothing connected).
+    LaunchedEffect(status.linkUp, status.kind, status.factory, attempt, awaitingStart) {
+        val pending = attempt ?: return@LaunchedEffect
+        val qr = pairedQr ?: return@LaunchedEffect
+        if (awaitingStart) {
+            if (status.kind == StatusKind.BUSY) awaitingStart = false
+            return@LaunchedEffect
+        }
+        when {
+            status.linkUp -> {
+                // It WORKED. Pin the connector that actually formed the link, so this bike carries a proven
+                // choice instead of a guess to be re-derived (and re-lost) on every ride — then hand the
+                // rider over to the cockpit, connected.
+                val formed = (status.factory as? ConnState.Connected)?.endpoint?.kind
+                BikeMemory.setConnectorChoice(ctx, qr, provenChoice(ctx, qr, pending, formed))
+                attempt = null
+                failure = null
+                leaveToDashboard()
+            }
+            status.kind == StatusKind.FAULT -> {
+                // Stay. The reason goes on screen next to the options, because the fix for a wrong connector
+                // is the rider picking another one — never the app trying one behind their back.
+                failure = status.text
+                attempt = null
+            }
+        }
+    }
+
     fun setZoom(r: Float) {
         zoom = r
         val cam = camera ?: return
@@ -190,7 +279,8 @@ fun ScanScreen(nav: NavController) {
                     pv
                 },
             )
-            Box(Modifier.fillMaxSize().padding(horizontal = 52.dp).padding(top = 120.dp, bottom = 220.dp), contentAlignment = Alignment.Center) {
+            // The reticle belongs to scanning; once a bike is paired the connect panel owns the screen.
+            if (pairedQr == null) Box(Modifier.fillMaxSize().padding(horizontal = 52.dp).padding(top = 120.dp, bottom = 220.dp), contentAlignment = Alignment.Center) {
                 Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
                     Canvas(Modifier.fillMaxSize()) {
                         val len = 34.dp.toPx(); val sw = 5.dp.toPx(); val w = size.width; val h = size.height
@@ -226,7 +316,7 @@ fun ScanScreen(nav: NavController) {
             }
         }
 
-        // Bottom controls — hidden once a bike is paired (the connection confirm step takes over).
+        // Bottom controls — hidden once a bike is paired (the connect step takes over).
         if (pairedQr == null) {
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
@@ -251,49 +341,67 @@ fun ScanScreen(nav: NavController) {
             }
         }
 
-        // Connection confirm/override: show the detected connector and let the rider pin one before leaving.
+        // The connect step: the bike, every mechanism in plain sight, and Conectar. This is the guarantee —
+        // the rider does not leave this screen believing a connector works until one actually has.
         pairedQr?.let { qr ->
-            val current = remember(connectorRefresh) { BikeMemory.connectorChoice(ctx, qr) }
-            // The connector AUTO really resolves to (QR + Setup preference + this bike's learned winner) —
-            // the same value BikeMemory.save just persisted as the pairing decision, not the bare QR guess.
+            val current = remember(qr, connectorRefresh) { BikeMemory.connectorChoice(ctx, qr) }
+            // What AUTO really resolves to on this phone (QR + Setup preference + this bike's learned
+            // winner), so the "Automático" line can name the mechanism it will actually use.
             val detected = remember(qr, connectorRefresh) { BikeMemory.autoDetectedMode(ctx, qr) }
-            val affordance = connectorRowLabel(current, detected)
+            val bikeName = qr.name?.takeIf { it.isNotBlank() } ?: qr.ssid
+            val busy = attempt != null
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                MonoLabel(stringResource(R.string.ovk_scan_paired), color = c.inkDim)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Row(
-                        Modifier.clip(RoundedCornerShape(999.dp)).background(c.surface1).border(1.dp, c.line, RoundedCornerShape(999.dp)).clickable { showConnectorPicker = true }.padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(R.string.ovk_garage_conn_label) + ": " + affordance + "  ▾",
-                            color = c.ink, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(c.ground.copy(alpha = 0.94f)).border(1.dp, c.line, RoundedCornerShape(16.dp)).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            MonoLabel(stringResource(R.string.ovk_scan_paired), color = c.inkDim)
+                            Text(
+                                bikeName, color = c.ink, fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        ConnectorHelpButton(onClick = { showConnectorHelp = true })
                     }
-                    ConnectorHelpButton(onClick = { showConnectorHelp = true })
-                }
-                GhostButton(stringResource(R.string.ovk_scan_done), { nav.popBackStack() }, Modifier.fillMaxWidth())
-            }
-        }
-
-        if (showConnectorPicker) {
-            pairedQr?.let { qr ->
-                ConnectorChoiceDialog(
-                    bikeName = qr.name?.takeIf { it.isNotBlank() } ?: qr.ssid,
-                    current = BikeMemory.connectorChoice(ctx, qr),
-                    detected = BikeMemory.autoDetectedMode(ctx, qr),
-                    onPick = { picked ->
+                    if (busy) {
+                        // Until the connect is seen starting, the connection is still reporting the PREVIOUS
+                        // attempt (flows arrive a frame late) — saying "Conectando…" is simply what is true.
+                        Text(
+                            if (awaitingStart) stringResource(R.string.conn_joining_wifi) else status.text,
+                            color = c.ignition, fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp,
+                        )
+                    } else {
+                        failure?.let { ScanNotice(it) }
+                    }
+                    MonoLabel(stringResource(R.string.ovk_scan_how_it_connects), color = c.inkFaint)
+                    ConnectorChips(current = current, enabled = !busy) { picked ->
                         BikeMemory.setConnectorChoice(ctx, qr, picked)
                         connectorRefresh++
-                        showConnectorPicker = false
+                        failure = null
+                    }
+                    Text(connectorDescription(current, detected), color = c.inkDim, fontSize = 11.5.sp)
+                }
+                PrimaryButton(
+                    text = if (busy) stringResource(R.string.ovk_cancel) else stringResource(R.string.ovk_connect),
+                    onClick = {
+                        if (busy) {
+                            // Cancel is the rider's, not ours: we never abandon an attempt on our own.
+                            CfmotoConnect.stop(ctx)
+                            attempt = null
+                        } else {
+                            connectNow(qr)
+                        }
                     },
-                    onDismiss = { showConnectorPicker = false },
+                    modifier = Modifier.fillMaxWidth(),
                 )
+                GhostButton(stringResource(R.string.ovk_scan_done), { nav.popBackStack() }, Modifier.fillMaxWidth())
             }
         }
 
@@ -302,6 +410,31 @@ fun ScanScreen(nav: NavController) {
         }
     }
 }
+
+/**
+ * The connector to REMEMBER after a connect that worked — a VALIDATED pin, not a guess the app has to
+ * re-derive (and can re-derive differently) on every ride.
+ *
+ * A pinned choice just proved itself, so it stays. AUTO is the interesting one, and the honest answer is
+ * [formed]: the transport that ACTUALLY carried the link, straight off the connection's own endpoint. The
+ * bike's stored spec would seem the obvious source, but the driver publishes `Connected` BEFORE its
+ * persistence hook writes that spec (`DefaultBikeConnection.ensureConnected`), so reading it here can lose
+ * the race and pin the mode that was stored *before* this connect — the very stale value the connect just
+ * disproved. The spec is only the fallback for the classic (no-factory) path, which has no endpoint to ask.
+ */
+private fun provenChoice(
+    ctx: Context,
+    qr: QrData,
+    attempted: ConnectorChoice,
+    formed: TransportKind?,
+): ConnectorChoice = when {
+    attempted != ConnectorChoice.AUTO -> attempted
+    formed != null -> ConnectorChoice.forTransport(formed)
+    else -> ConnectorChoice.forTransport(BikeMemory.specFor(ctx, qr)?.mode ?: BikeMemory.autoDetectedMode(ctx, qr))
+}
+
+/** How long to wait for a tapped connect to be seen starting before offering Conectar again. */
+private const val CONNECT_START_TIMEOUT_MS = 8_000L
 
 /** How long an unusable-code message stays up after the LAST read of that code. */
 private const val NOTICE_VISIBLE_MS = 3_500L
