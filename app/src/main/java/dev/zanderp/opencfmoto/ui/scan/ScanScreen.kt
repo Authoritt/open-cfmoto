@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Scan — CameraX + ML Kit QR scanner as a Compose screen, styled to the cockpit mockup: corner
-// reticle, zoom, scan-from-photo, manual Wi-Fi entry. A valid dash QR pairs the bike and returns.
+// reticle, zoom, scan-from-photo, manual Wi-Fi entry. A valid dash QR pairs the bike; a code we cannot
+// use SAYS SO (it used to fail in complete silence) and scanning simply carries on.
 package dev.zanderp.opencfmoto.ui.scan
 
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
@@ -37,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -74,6 +77,7 @@ import dev.zanderp.opencfmoto.ui.connection.connectorRowLabel
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
 
 @Composable
 fun ScanScreen(nav: NavController) {
@@ -87,6 +91,31 @@ fun ScanScreen(nav: NavController) {
     LaunchedEffect(Unit) { if (!granted) permLauncher.launch(Manifest.permission.CAMERA) }
 
     val handled = remember { AtomicBoolean(false) }
+    // A code we read but cannot use is the rider's only feedback that anything happened at all: `onQr`
+    // used to just re-arm the scanner, so pointing the phone at a sticker, a parking QR or another bike's
+    // dash did NOTHING — no message, no sound, nothing to distinguish "wrong QR" from "camera is broken".
+    // [notice] is that message; it never blocks the camera, which keeps scanning underneath it.
+    var notice by remember { mutableStateOf<String?>(null) }
+    var noticeAt by remember { mutableLongStateOf(0L) }
+    val msgQrUnknown = stringResource(R.string.ovk_scan_qr_unknown)
+    val msgQrNoneInPhoto = stringResource(R.string.ovk_scan_qr_none_in_photo)
+    // The camera re-reads the SAME unusable code many times a second. Re-raising the message on each read
+    // would restart the auto-hide below every frame (flicker); ignoring the repeats would hide it while the
+    // rider is still aiming at the offending code. So: the same text within [NOTICE_KEEPALIVE_MS] just keeps
+    // the banner alive, and it clears [NOTICE_VISIBLE_MS] after the LAST read — steady while aiming, gone
+    // shortly after looking away.
+    fun showNotice(text: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (text == notice && now - noticeAt < NOTICE_KEEPALIVE_MS) return
+        notice = text
+        noticeAt = now
+    }
+    LaunchedEffect(notice, noticeAt) {
+        if (notice != null) {
+            delay(NOTICE_VISIBLE_MS)
+            notice = null
+        }
+    }
     val scanner = remember { BarcodeScanning.getClient() }
     val executor = remember { Executors.newSingleThreadExecutor() }
     var camera by remember { mutableStateOf<Camera?>(null) }
@@ -103,8 +132,12 @@ fun ScanScreen(nav: NavController) {
         val qr = QrData.parse(raw)
         if (qr != null) {
             BikeMemory.save(ctx, raw, qr)
-            pairedQr = qr // show the connection confirm/override step instead of leaving immediately
+            pairedQr = qr // show the connection step instead of leaving immediately
         } else {
+            // Not a dash pairing QR. Say so and KEEP SCANNING (re-arm) — the rider is holding a phone up to
+            // a bike, and the useful answer is "that's the wrong code, here's where the right one is",
+            // not a dialog to dismiss.
+            showNotice(msgQrUnknown)
             handled.set(false)
         }
     }
@@ -117,14 +150,23 @@ fun ScanScreen(nav: NavController) {
 
     val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null && handled.compareAndSet(false, true)) {
+            // Two different failures, two different messages: an image with NO code in it is the rider's
+            // photo problem ("no QR found"), while an image whose code we can read but not use falls through
+            // to onQr's "not a compatible bike". Collapsing them would send the rider hunting for a better
+            // photo of a QR that was never going to work.
             runCatching {
                 scanner.process(InputImage.fromFilePath(ctx, uri))
                     .addOnSuccessListener { bs ->
                         val qr = bs.firstOrNull { it.format == Barcode.FORMAT_QR_CODE }?.rawValue
-                        if (qr != null) onQr(qr) else handled.set(false)
+                        if (qr != null) {
+                            onQr(qr)
+                        } else {
+                            showNotice(msgQrNoneInPhoto)
+                            handled.set(false)
+                        }
                     }
-                    .addOnFailureListener { handled.set(false) }
-            }.onFailure { handled.set(false) }
+                    .addOnFailureListener { showNotice(msgQrNoneInPhoto); handled.set(false) }
+            }.onFailure { showNotice(msgQrNoneInPhoto); handled.set(false) }
         }
     }
 
@@ -191,6 +233,7 @@ fun ScanScreen(nav: NavController) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                notice?.let { ScanNotice(it) }
                 Text(stringResource(R.string.ovk_scan_aim), color = c.ink, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ZoomPill("1×", zoom == 1f) { setZoom(1f) }
@@ -257,6 +300,33 @@ fun ScanScreen(nav: NavController) {
         if (showConnectorHelp) {
             ConnectorHelpDialog(onDismiss = { showConnectorHelp = false })
         }
+    }
+}
+
+/** How long an unusable-code message stays up after the LAST read of that code. */
+private const val NOTICE_VISIBLE_MS = 3_500L
+
+/** Repeats of the SAME message inside this window keep the banner alive instead of re-raising it. */
+private const val NOTICE_KEEPALIVE_MS = 900L
+
+/**
+ * Non-blocking "that code is no use here" banner. Deliberately NOT a dialog: the camera keeps scanning
+ * underneath, so the rider can simply move the phone to the right QR without dismissing anything.
+ */
+@Composable
+private fun ScanNotice(text: String) {
+    val c = LocalCockpitColors.current
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(c.surface1)
+            .border(1.dp, c.warn.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("⚠", color = c.warn, fontSize = 13.sp)
+        Spacer(Modifier.width(9.dp))
+        Text(text, color = c.ink, fontSize = 12.sp)
     }
 }
 

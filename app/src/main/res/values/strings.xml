@@ -769,6 +769,9 @@
     <string name="ovk_scan_photo">Photo</string>
     <string name="ovk_scan_manual_wifi">Enter Wi-Fi manually</string>
     <string name="ovk_scan_paired">Bike paired</string>
+    <!-- A code was read but it is not a dash pairing QR: the rider must SEE that something happened. -->
+    <string name="ovk_scan_qr_unknown">That QR isn\'t from a compatible bike. Look for the pairing QR on the dash screen.</string>
+    <string name="ovk_scan_qr_none_in_photo">No QR found in that image.</string>
     <string name="ovk_scan_done">Done</string>
     <!-- settings screen -->
     <string name="ovk_settings_title">Settings</string>
