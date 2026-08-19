@@ -698,6 +698,10 @@
     <string name="ovk_garage_saved">guardada</string>
     <string name="ovk_garage_no_mode">SIN MODO</string>
     <string name="ovk_garage_mode_subtitle">Se elige una vez por moto. Editable aquí cuando quieras.</string>
+    <!-- garage: quitar una moto -->
+    <string name="ovk_garage_remove">Quitar</string>
+    <string name="ovk_dlg_remove_title">¿Quitar %1$s?</string>
+    <string name="ovk_dlg_remove_body">Se borrará esta moto y sus ajustes de conexión. Puedes volver a escanear su QR cuando quieras.</string>
     <!-- garage/scan: mecanismo de conexión por moto (ConnectorChoice) -->
     <string name="ovk_garage_conn_label">Conexión</string>
     <string name="ovk_dlg_conn_title">¿Cómo se conecta %1$s?</string>

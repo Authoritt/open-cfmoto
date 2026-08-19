@@ -712,6 +712,10 @@
     <string name="ovk_garage_saved">saved</string>
     <string name="ovk_garage_no_mode">NO MODE</string>
     <string name="ovk_garage_mode_subtitle">Chosen once per bike. Editable here whenever you like.</string>
+    <!-- garage: remove a bike -->
+    <string name="ovk_garage_remove">Remove</string>
+    <string name="ovk_dlg_remove_title">Remove %1$s?</string>
+    <string name="ovk_dlg_remove_body">This bike and its connection settings will be deleted. You can re-scan its QR anytime.</string>
     <!-- garage: per-bike default map provider (config-ownership design doc §2) -->
     <string name="ovk_garage_no_map">NO DEFAULT</string>
     <string name="ovk_dlg_map_title">Default map for %1$s?</string>

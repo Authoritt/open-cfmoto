@@ -9,6 +9,7 @@ import dev.zanderp.opencfmoto.connection.factory.bikeIdFor
 import dev.zanderp.opencfmoto.connection.factory.detectedAtPairing
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 /**
  * One remembered bike: the exact scanned QR, a friendly (user-editable) name, and an optional photo
@@ -63,7 +64,13 @@ object BikeMemory {
     /** All remembered bikes, most-recently-saved first. */
     fun devices(ctx: Context): List<SavedBike> {
         migrateIfNeeded(ctx)
-        val arr = runCatching { JSONArray(prefs(ctx).getString(KEY_LIST, "[]")) }.getOrNull()
+        return devices(prefs(ctx))
+    }
+
+    /** [SharedPreferences]-direct core of [devices] (test seam; see [specFor]'s KDoc) — skips
+     *  migration, a first-run [Context]-only concern with nothing to migrate on a hand-rolled fake. */
+    internal fun devices(prefs: SharedPreferences): List<SavedBike> {
+        val arr = runCatching { JSONArray(prefs.getString(KEY_LIST, "[]")) }.getOrNull()
             ?: return emptyList()
         return buildList {
             for (i in 0 until arr.length()) {
@@ -142,11 +149,46 @@ object BikeMemory {
         writeList(ctx, devices(ctx).map { if (it.raw == raw) it.copy(photoPath = path) else it })
     }
 
-    fun remove(ctx: Context, raw: String) {
-        writeList(ctx, devices(ctx).filter { it.raw != raw })
-        if (prefs(ctx).getString(KEY_SELECTED, null) == raw) {
-            prefs(ctx).edit().remove(KEY_SELECTED).apply()
+    /**
+     * Remove a saved bike and purge every per-bike key it owns: the [ConnectionSpec], any pinned
+     * [ConnectorChoice], the learned Wi-Fi [winningTransport], the projection [bikeMode], and its photo
+     * file — not just the list entry. Before this fix, [remove] only dropped the list entry and cleared
+     * [KEY_SELECTED]; re-scanning the SAME bike afterwards resurrected the stale spec/connector, because
+     * [save] only seeds a fresh spec `if (specFor(ctx, qr) == null)` — silently defeating the app's own
+     * "escanea el QR de la moto otra vez" remedy for a rider who removed and re-paired for a clean slate.
+     *
+     * [KEY_SPEC_PREFIX]/[KEY_CONNECTOR_PREFIX] are keyed by [ConnectionSpec.bikeIdFor] (the QR mac, else
+     * ssid); [KEY_MODE_PREFIX]/[KEY_TRANSPORT_PREFIX] are keyed by the plain [QrData.ssid] — both need the
+     * *parsed* QR, so this parses the stored [raw] itself ([QrData.parse]; the exact string the list
+     * persists — see [SavedBike.qr]). A [raw] that no longer parses (corrupt/legacy entry) has no id/ssid
+     * to purge by: the list entry and its photo (both keyed by [raw] alone) are still removed, and this
+     * never throws.
+     */
+    fun remove(ctx: Context, raw: String) = remove(prefs(ctx), raw)
+
+    /** [SharedPreferences]-direct core of [remove] (test seam; see [specFor]'s KDoc). */
+    internal fun remove(prefs: SharedPreferences, raw: String) {
+        val list = devices(prefs)
+        val bike = list.firstOrNull { it.raw == raw }
+        writeList(prefs, list.filter { it.raw != raw })
+        if (prefs.getString(KEY_SELECTED, null) == raw) {
+            prefs.edit().remove(KEY_SELECTED).apply()
         }
+        // Legacy single-bike "last bike" keys (see their KDoc): harmless once migrated, but clear them
+        // too if THIS was the last bike, so a stale one never lingers for some future reader to trip over.
+        if (prefs.getString(KEY_RAW, null) == raw) {
+            prefs.edit().remove(KEY_RAW).remove(KEY_NAME).apply()
+        }
+        QrData.parse(raw)?.let { qr ->
+            val id = ConnectionSpec.bikeIdFor(qr)
+            if (id.isNotBlank()) {
+                prefs.edit().remove("$KEY_SPEC_PREFIX$id").remove("$KEY_CONNECTOR_PREFIX$id").apply()
+            }
+            if (qr.ssid.isNotBlank()) {
+                prefs.edit().remove("$KEY_MODE_PREFIX${qr.ssid}").remove("$KEY_TRANSPORT_PREFIX${qr.ssid}").apply()
+            }
+        }
+        bike?.photoPath?.let { path -> runCatching { File(path).delete() } }
     }
 
     fun clear(ctx: Context) {
@@ -185,12 +227,18 @@ object BikeMemory {
      * The projection mode ("CFMOTO" | "ANDROID_AUTO") chosen for [ssid] when pairing, or null if not
      * chosen yet (→ the first-connect popup asks). Kept per bike, not on the dashboard.
      */
-    fun bikeMode(ctx: Context, ssid: String): String? =
-        if (ssid.isBlank()) null else prefs(ctx).getString("$KEY_MODE_PREFIX$ssid", null)
+    fun bikeMode(ctx: Context, ssid: String): String? = bikeMode(prefs(ctx), ssid)
 
-    fun setBikeMode(ctx: Context, ssid: String, mode: String) {
+    /** [SharedPreferences]-direct core of [bikeMode] (test seam; see [specFor]'s KDoc). */
+    internal fun bikeMode(prefs: SharedPreferences, ssid: String): String? =
+        if (ssid.isBlank()) null else prefs.getString("$KEY_MODE_PREFIX$ssid", null)
+
+    fun setBikeMode(ctx: Context, ssid: String, mode: String) = setBikeMode(prefs(ctx), ssid, mode)
+
+    /** [SharedPreferences]-direct core of [setBikeMode] (test seam; see [specFor]'s KDoc). */
+    internal fun setBikeMode(prefs: SharedPreferences, ssid: String, mode: String) {
         if (ssid.isBlank()) return
-        prefs(ctx).edit().putString("$KEY_MODE_PREFIX$ssid", mode).apply()
+        prefs.edit().putString("$KEY_MODE_PREFIX$ssid", mode).apply()
     }
 
     /**
@@ -311,14 +359,18 @@ object BikeMemory {
     fun lastBikeName(ctx: Context): String? = selected(ctx)?.name
     fun hasSaved(ctx: Context): Boolean = selected(ctx) != null
 
-    private fun writeList(ctx: Context, list: List<SavedBike>) {
+    private fun writeList(ctx: Context, list: List<SavedBike>) = writeList(prefs(ctx), list)
+
+    /** [SharedPreferences]-direct core of the private [writeList] (test seam for [remove]; see
+     *  [specFor]'s KDoc). */
+    internal fun writeList(prefs: SharedPreferences, list: List<SavedBike>) {
         val arr = JSONArray()
         for (b in list) {
             val o = JSONObject().put("raw", b.raw).put("name", b.name)
             b.photoPath?.let { o.put("photo", it) }
             arr.put(o)
         }
-        prefs(ctx).edit().putString(KEY_LIST, arr.toString()).apply()
+        prefs.edit().putString(KEY_LIST, arr.toString()).apply()
     }
 
     /** Fold a pre-multi-device single saved bike into the list, once. */

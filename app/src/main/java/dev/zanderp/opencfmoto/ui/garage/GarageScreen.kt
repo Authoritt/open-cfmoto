@@ -59,12 +59,15 @@ import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 fun GarageScreen(nav: NavController) {
     val c = LocalCockpitColors.current
     val ctx = LocalContext.current
-    val bikes = remember { BikeMemory.devices(ctx) }
-    val selected = remember { BikeMemory.lastRaw(ctx) }
     var refresh by remember { mutableStateOf(0) }
+    // Keyed by refresh: unlike the per-bike tags below (whose VALUES change), removing a bike changes
+    // the LIST itself — the row must disappear from THIS composition, not just on next navigation.
+    val bikes = remember(refresh) { BikeMemory.devices(ctx) }
+    val selected = remember(refresh) { BikeMemory.lastRaw(ctx) }
     var modeFor by remember { mutableStateOf<SavedBike?>(null) }
     var providerFor by remember { mutableStateOf<SavedBike?>(null) }
     var connectorFor by remember { mutableStateOf<SavedBike?>(null) }
+    var removeFor by remember { mutableStateOf<SavedBike?>(null) }
 
     Column(
         Modifier.fillMaxSize().background(c.ground).verticalScroll(rememberScrollState()).padding(16.dp),
@@ -82,6 +85,7 @@ fun GarageScreen(nav: NavController) {
                     onModeClick = { modeFor = bike },
                     onProviderClick = { providerFor = bike },
                     onConnectorClick = { connectorFor = bike },
+                    onRemoveClick = { removeFor = bike },
                 )
             }
         }
@@ -158,6 +162,18 @@ fun GarageScreen(nav: NavController) {
             onDismiss = { connectorFor = null },
         )
     }
+
+    removeFor?.let { bike ->
+        RemoveBikeDialog(
+            bikeName = bike.name,
+            onConfirm = {
+                BikeMemory.remove(ctx, bike.raw)
+                refresh++
+                removeFor = null
+            },
+            onDismiss = { removeFor = null },
+        )
+    }
 }
 
 @Composable
@@ -168,6 +184,7 @@ private fun BikeRow(
     onModeClick: () -> Unit,
     onProviderClick: () -> Unit,
     onConnectorClick: () -> Unit,
+    onRemoveClick: () -> Unit,
 ) {
     val c = LocalCockpitColors.current
     val ctx = LocalContext.current
@@ -217,6 +234,7 @@ private fun BikeRow(
                 pinned = connector != ConnectorChoice.AUTO,
                 onClick = onConnectorClick,
             )
+            RemoveTag(onClick = onRemoveClick)
         }
     }
 }
@@ -254,6 +272,17 @@ private fun ConnectorTag(text: String, pinned: Boolean, onClick: () -> Unit) {
     ) { Text(text, color = fg, fontFamily = FontFamily.Monospace, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
+/** Destructive per-bike action — forgets this bike and every setting tied to it (its own small tap
+ *  target, same shape/size as the other tags, but in the fault color so it reads as destructive rather
+ *  than another piece of state to tap through). Opens [RemoveBikeDialog]; never removes directly. */
+@Composable
+private fun RemoveTag(onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Box(
+        Modifier.clip(RoundedCornerShape(6.dp)).background(c.ground).border(1.dp, c.fault.copy(alpha = 0.35f), RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(horizontal = 7.dp, vertical = 3.dp),
+    ) { Text(stringResource(R.string.ovk_garage_remove), color = c.fault, fontFamily = FontFamily.Monospace, fontSize = 9.sp) }
+}
+
 // Brand names stay literal; only the MIRROR ("Espejo") label is translated — mirrors the labeling this
 // helper replaces in ui/settings/SettingsScreen.kt's now-removed global provider row.
 private fun mapProviderLabel(ctx: Context, p: MapProvider) = when (p) {
@@ -272,6 +301,39 @@ private fun ModeDialog(bikeName: String, onPick: (String) -> Unit, onDismiss: ()
                 Spacer(Modifier.size(4.dp))
                 ChoiceRow("CFMOTO", stringResource(R.string.ovk_dlg_mode_cfmoto_desc), primary = true) { onPick("CFMOTO") }
                 ChoiceRow("Android Auto", stringResource(R.string.ovk_dlg_mode_aa_desc), primary = false) { onPick("ANDROID_AUTO") }
+            }
+        }
+    }
+}
+
+/**
+ * Confirm-before-destroy for [BikeMemory.remove]: names the bike and says plainly what is lost, so a
+ * rider never removes a bike by a stray tap on [RemoveTag]. Mirrors [ModeDialog]'s shell (same frame,
+ * same title/body styling) with a Cancelar/Quitar action row instead of [ChoiceRow]s, since this is a
+ * yes/no confirm, not a pick-one-of-N choice.
+ */
+@Composable
+private fun RemoveBikeDialog(bikeName: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(color = c.surface1, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, c.line)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text(stringResource(R.string.ovk_dlg_remove_title, bikeName), color = c.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(stringResource(R.string.ovk_dlg_remove_body), color = c.inkDim, fontSize = 12.5.sp)
+                Spacer(Modifier.size(6.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Text(
+                        stringResource(R.string.ovk_cancel), color = c.inkDim, fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onDismiss).padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        stringResource(R.string.ovk_garage_remove), color = c.fault, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(c.fault.copy(alpha = 0.12f))
+                            .border(1.dp, c.fault.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                            .clickable(onClick = onConfirm).padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                }
             }
         }
     }

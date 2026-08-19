@@ -4,9 +4,11 @@ import android.content.SharedPreferences
 import dev.zanderp.opencfmoto.connection.factory.ConnectionSpec
 import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.bikeIdFor
 import dev.zanderp.opencfmoto.connection.factory.fromQr
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -263,6 +265,104 @@ class BikeMemoryTest {
         val spec = BikeMemory.specFor(prefs, q)
         assertEquals(TransportKind.P2P, spec?.mode)
         assertEquals("10.0.0.1", spec?.lastEndpointHint)
+    }
+
+    // ---- remove(): purge every per-bike key it owns, not just the list entry (data-hygiene fix) ----
+    // Before this fix, remove() only dropped the list entry + KEY_SELECTED, leaving spec_/connector_/
+    // mode_/transport_ behind — so re-scanning the SAME bike resurrected the stale connector, because
+    // save() only seeds a fresh spec `if (specFor(ctx, qr) == null)`. These go through remove(raw: String)
+    // itself (not a QrData param), exactly like the production Context overload, so the raw is parsed
+    // internally with QrData.parse — the same seam BikeMemory.remove(ctx, raw) exercises.
+    //
+    // NOTE on scope: these deliberately do NOT seed/assert the KEY_LIST entry (devices()/writeList()) or
+    // the photo file — both go through org.json, which `unitTests.isReturnDefaultValues = true` (see
+    // app/build.gradle.kts) turns into a no-op stub here (JSONObject().put(...) returns null instead of
+    // `this`, JSONArray.length() always reads back 0), the exact same "no Robolectric" constraint
+    // [specFor]'s KDoc documents for Context. remove() still calls devices(prefs)/writeList(prefs, ...)
+    // internally on the (always-empty-here) list — harmlessly, since the per-bike-prefixed purge below is
+    // independent of it — and is exercised for real by the app on-device.
+
+    @Test fun `remove purges the spec, pinned connector, learned transport, bike mode and last-bike keys`() {
+        val prefs = FakeSharedPreferences()
+        val raw = "http://www.carbit.com.cn/qr?action=1&ssid=CFMOTO-1234&pwd=secretpwd&auth=wpa2-psk" +
+            "&mac=AA:AA:AA:AA:AA:AA&name=MyBike"
+        val q = QrData.parse(raw)!!
+        val id = ConnectionSpec.bikeIdFor(q) // the mac, since this QR carries one
+
+        // Pair it: a spec, a rider-pinned (non-AUTO) connector, a learned winning transport, a chosen
+        // projection mode, and the selection state a real pairing leaves behind.
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.P2P) // also (re)writes the spec, mode=P2P
+        BikeMemory.setWinningTransport(prefs, q.ssid, "AP")
+        BikeMemory.setBikeMode(prefs, q.ssid, "CFMOTO")
+        prefs.edit()
+            .putString("selected_raw", raw)
+            .putString("last_qr_raw", raw)
+            .putString("last_bike_name", "MyBike")
+            .apply()
+
+        // Sanity: it is all really there before removing.
+        assertEquals(ConnectorChoice.P2P, BikeMemory.connectorChoice(prefs, q))
+        assertEquals(TransportKind.P2P, BikeMemory.specFor(prefs, q)?.mode)
+
+        BikeMemory.remove(prefs, raw)
+
+        assertNull("spec must be purged", BikeMemory.specFor(prefs, q))
+        assertEquals(
+            "connector pin must be purged (reads back as the AUTO default)",
+            ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, q),
+        )
+        assertNull("learned winning transport must be purged", BikeMemory.winningTransport(prefs, q.ssid))
+        assertNull("bike mode must be purged", BikeMemory.bikeMode(prefs, q.ssid))
+        assertNull("selected_raw must be cleared", prefs.getString("selected_raw", null))
+        assertNull("legacy last-bike raw must be cleared", prefs.getString("last_qr_raw", null))
+        assertNull("legacy last-bike name must be cleared", prefs.getString("last_bike_name", null))
+        // Pin down the raw key shape too, not just the reader's own defaulting behavior.
+        assertNull(prefs.getString("spec_$id", null))
+        assertNull(prefs.getString("connector_$id", null))
+        assertNull(prefs.getString("mode_${q.ssid}", null))
+        assertNull(prefs.getString("transport_${q.ssid}", null))
+
+        // Re-saving the same QR (what re-scanning the dash does) must seed a FRESH spec — the old P2P pin
+        // must NOT resurrect. save()'s own guard is `if (specFor(ctx, qr) == null)`, already proven above.
+        BikeMemory.saveSpec(prefs, ConnectionSpec.fromQr(q))
+        assertEquals(
+            "a fresh scan gets the QR's own family, not the removed P2P pin",
+            TransportKind.SOFT_AP, BikeMemory.specFor(prefs, q)?.mode,
+        )
+    }
+
+    @Test fun `remove purges a mac-only (blank-ssid) phone-hotspot bike by its mac-keyed spec+connector`() {
+        val prefs = FakeSharedPreferences()
+        // Zontes/opaque-CARBIT shape: action=128 (phone-hosts-hotspot) + bm= (mac), no ssid at all.
+        val raw = "http://www.carbit.com.cn/qr?action=128&bm=BB:BB:BB:BB:BB:BB"
+        val q = QrData.parse(raw)!!
+        val id = ConnectionSpec.bikeIdFor(q)
+        assertEquals("guard the premise — no real ssid, the id keys by mac", q.mac, id)
+        assertTrue("guard the premise — ssid is a synthetic placeholder, never truly blank", q.ssid.isNotBlank())
+
+        BikeMemory.setConnectorChoice(prefs, q, ConnectorChoice.RIEJU_BLE) // writes spec_<mac> + connector_<mac>
+        BikeMemory.setWinningTransport(prefs, q.ssid, "AP") // transport_<synthetic ssid>
+        BikeMemory.setBikeMode(prefs, q.ssid, "CFMOTO") // mode_<synthetic ssid>
+        assertEquals("RIEJU_BLE", prefs.getString("connector_$id", null))
+
+        BikeMemory.remove(prefs, raw)
+
+        assertNull(BikeMemory.specFor(prefs, q))
+        assertEquals(ConnectorChoice.AUTO, BikeMemory.connectorChoice(prefs, q))
+        assertNull(BikeMemory.winningTransport(prefs, q.ssid))
+        assertNull(BikeMemory.bikeMode(prefs, q.ssid))
+        assertNull("the mac-keyed connector pin itself must be gone", prefs.getString("connector_$id", null))
+    }
+
+    @Test fun `remove on a raw that no longer parses never throws (no id or ssid to derive)`() {
+        val prefs = FakeSharedPreferences()
+        val corrupt = "not a real qr string"
+        prefs.edit().putString("selected_raw", corrupt).apply()
+        assertNull("guard the premise — this really doesn't parse", QrData.parse(corrupt))
+
+        BikeMemory.remove(prefs, corrupt) // must not throw
+
+        assertNull("selected_raw must still be cleared even when the raw doesn't parse", prefs.getString("selected_raw", null))
     }
 }
 
