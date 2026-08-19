@@ -613,9 +613,9 @@
     <string name="ovk_call_active">On call</string>
     <string name="ovk_call_answer">Answer</string>
     <string name="ovk_call_hangup">Hang up</string>
-    <string name="ovk_music_grant_access_desc">Music: grant notification access</string>
-    <string name="ovk_music_grant_access">Grant access</string>
-    <string name="ovk_music_none">No music</string>
+    <string name="ovk_music_grant_access_desc">To see and control your music on the bike dash, Android needs notification access turned on.</string>
+    <string name="ovk_music_grant_access">Turn on</string>
+    <string name="ovk_music_none">Nothing playing</string>
     <!-- cockpit: unified map / destination / nav progress -->
     <string name="ovk_destination_fallback">Destination</string>
     <string name="ovk_locate_permission_needed">Grant location permission to center the map</string>

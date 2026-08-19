@@ -599,9 +599,9 @@
     <string name="ovk_call_active">En llamada</string>
     <string name="ovk_call_answer">Contestar</string>
     <string name="ovk_call_hangup">Colgar</string>
-    <string name="ovk_music_grant_access_desc">Música: concede acceso a notificaciones</string>
-    <string name="ovk_music_grant_access">Conceder acceso</string>
-    <string name="ovk_music_none">Sin música</string>
+    <string name="ovk_music_grant_access_desc">Para ver y controlar tu música en el tablero de la moto, Android pide activar el acceso a notificaciones.</string>
+    <string name="ovk_music_grant_access">Activar</string>
+    <string name="ovk_music_none">No hay música sonando</string>
     <!-- cockpit: unified map / destination / nav progress -->
     <string name="ovk_destination_fallback">Destino</string>
     <string name="ovk_locate_permission_needed">Otorga permiso de ubicación para centrar el mapa</string>
