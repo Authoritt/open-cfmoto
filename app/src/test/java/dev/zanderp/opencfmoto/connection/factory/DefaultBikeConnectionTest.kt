@@ -166,4 +166,22 @@ class DefaultBikeConnectionTest {
             withTimeout(5_000) { conn.state.first { it == ConnState.Idle } }
         }
     }
+
+    @Test
+    fun `onWifiReacquired before connect enqueues safely with no receiver (no throw, stays Idle)`() {
+        // The re-acquire hinge (flip-work-design.md §3) sends a LinkDropped into the UNLIMITED events channel.
+        // With no driver running there is no receiver — this must NOT throw (trySend on an unbounded channel
+        // always succeeds) and the connection must stay Idle. This is exactly the "no receiver" safety the
+        // raised SoftAP/P2P caps protect at runtime by keeping the driver (and its receiver) alive across an
+        // outage so a later re-acquire always recovers. No Context needed: connect() is never called.
+        val conn = DefaultBikeConnection(
+            transport = RecordingTransport(),
+            links = listOf(RecordingLink()),
+            spec = softApSpec(),
+            io = NoActivityIo,
+        )
+        conn.onWifiReacquired(null)
+        conn.onWifiReacquired(null)
+        assertEquals(ConnState.Idle, conn.state.value)
+    }
 }

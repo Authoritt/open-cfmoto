@@ -761,6 +761,8 @@
     <string name="ovk_settings_group_developer">Developer</string>
     <string name="ovk_settings_developer_mode">Developer mode</string>
     <string name="ovk_settings_developer_mode_sub">On — 7 taps on Version toggles it</string>
+    <string name="ovk_settings_use_factory">New connection engine (450NK) — A/B</string>
+    <string name="ovk_settings_use_factory_sub">Route SoftAP/P2P through the new state machine. Default off.</string>
     <string name="ovk_settings_diagnostics">Logs</string>
     <string name="ovk_settings_diagnostics_val">Session log</string>
     <!-- Native cockpit log viewer (ui/settings/LogScreen.kt) -->

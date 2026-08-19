@@ -57,6 +57,14 @@ interface BikeConnection {
     val state: StateFlow<ConnState>
     fun connect()
     fun disconnect()
+
+    /**
+     * A Wi-Fi drop then re-acquire happened outside this connection (detected by the shared `BikeWifi`
+     * NetworkCallback, forked through `BikeLink.onWifiReacquired`). Re-establish the LINK on the [network]
+     * that just came back, keeping the transport up — never re-open it (`flip-work-design.md` §2/§3). No-op
+     * for connections with no bindable Network (P2P/phone-hotspot carry `network=null`).
+     */
+    fun onWifiReacquired(network: Network?)
 }
 
 /** A live link-layer session (EasyConn/Yunmo) established over a [BikeEndpoint]. */

@@ -161,6 +161,14 @@ fun SettingsScreen(nav: NavController) {
                     val msg = MapLibreVdProbe.toggle(ctx)
                     Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                 }
+                // A/B (default off = classic): route the 450NK SoftAP/P2P connect through the new connection
+                // factory / state machine. Synchronous AppSettings mirror (read on joinWifi's hot path).
+                var useFactory by remember { mutableStateOf(AppSettings.useConnectionFactory(ctx)) }
+                ToggleRow(
+                    stringResource(R.string.ovk_settings_use_factory),
+                    stringResource(R.string.ovk_settings_use_factory_sub),
+                    useFactory,
+                ) { on -> useFactory = on; AppSettings.setUseConnectionFactory(ctx, on) }
             }
         }
         Group(stringResource(R.string.ovk_settings_group_about)) {

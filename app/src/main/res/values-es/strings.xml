@@ -743,6 +743,8 @@
     <string name="ovk_settings_group_developer">Desarrollador</string>
     <string name="ovk_settings_developer_mode">Modo desarrollador</string>
     <string name="ovk_settings_developer_mode_sub">Activado — 7 toques en Versión lo alterna</string>
+    <string name="ovk_settings_use_factory">Nuevo motor de conexión (450NK) — A/B</string>
+    <string name="ovk_settings_use_factory_sub">Enruta SoftAP/P2P por la nueva máquina de estados. Desactivado por defecto.</string>
     <string name="ovk_settings_diagnostics">Registros · Diagnóstico</string>
     <string name="ovk_settings_diagnostics_val">Registro de sesión</string>
     <!-- Visor de registros nativo del cockpit (ui/settings/LogScreen.kt) -->

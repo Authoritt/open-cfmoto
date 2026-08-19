@@ -68,34 +68,12 @@ import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
  */
 object CfmotoConnect {
 
-    /**
-     * Route SoftAP/P2P connects through [BikeConnectionFactory] (design doc 2026-08-18) instead of the
-     * proven [joinWifiP2p] / [BikeWifi.reuseOrJoin] + [proberFor] path below. KEEP FALSE: the factory has
-     * not been verified against a live bike yet (Task 7 only proves it builds/installs/launches clean).
-     * Flip only after an owner-in-the-loop SoftAP + P2P regression pass on the bike; instant rollback is
-     * flipping this back.
-     *
-     * SCOPE: this flag governs ONLY the 450NK SoftAP/P2P classic path. Phone-hotspot QRs for a KNOWN-Rieju
-     * model id ([BLE_HOTSPOT_MODEL_IDS], see [isBleHotspot]) ALREADY route through the factory's
-     * `PhoneHotspotTransport` in [joinWifi] REGARDLESS of this flag — the Rieju has no working classic path,
-     * and that connector keeps its own readable-creds manual fallback. Every OTHER phone-hotspot bike (Zontes,
-     * opaque CARBIT tokens with no modelid) keeps the proven manual tether path. So flipping this true does
-     * NOT change phone-hotspot routing; it only switches SoftAP/P2P over.
-     *
-     * Before flipping true (the call site below is fire-and-forget — `.create(...).connect()`, instance
-     * discarded — so several lifecycle guarantees are NOT yet met; the phone-hotspot path already lives with
-     * this trade-off deliberately for the owner test):
-     *  (i)   Retain the [BikeConnection] handle and route teardown / mode-switch through its `disconnect()`.
-     *        As written, with the flag ON `disconnect()` is unreachable, the driver parks at
-     *        `events.receive()` forever, and a fresh per-instance scope leaks on every connect.
-     *  (ii)  Wire drop-watchdogs to feed `DefaultBikeConnection.signalLinkDropped`/`signalTransportLost`
-     *        (Task-6 deferral) — without them nothing drives reconnect after a mid-ride drop.
-     *  (iii) fromQr phone-hotspot gate reconciled with this router's `supportsPhoneHotspot && pwd.isEmpty()`
-     *        ✓ (ConnectionSpec.fromQr).
-     *  (iv)  Honor [joinWifi]'s `gateOnAaSteady` hand-off (Android-Auto-gated SoftAP/P2P connects still need
-     *        the old path). Phone-hotspot already routes through the factory, independent of this flag.
-     */
-    private const val USE_FACTORY = false
+    // The 450NK SoftAP/P2P factory route is now a RUNTIME dev toggle (replaces the old compile-time const
+    // flag): [AppSettings.useConnectionFactory], read in [joinWifi] below. Default OFF = classic path
+    // byte-for-byte; ON routes SoftAP/P2P through [BikeConnectionFactory] WITH reconnect + teardown parity
+    // (handle retained in [BikeConnectionHolder]; the `BikeLink.onWifiReacquired` fork drives re-establish;
+    // raised retry caps), scoped to the non-Android-Auto path. See `flip-work-design.md`. The Rieju
+    // phone-hotspot route ([isBleHotspot] below) goes through the factory INDEPENDENT of the toggle.
 
     /**
      * The phone-hotspot model(s) whose dash needs the factory's Wi-Fi-Direct + BLE `PhoneHotspotTransport`:
@@ -191,6 +169,10 @@ object CfmotoConnect {
         clearMirror: Boolean,
         localProber: EasyConnProber? = null,
     ) {
+        // Clear any live factory connection first (no-op when the toggle is OFF). NB: its disconnect() closes
+        // the transport → BikeWifi.leave(), so a mode-switch FROM a factory connection re-joins Wi-Fi (design
+        // §2 secondary risk); classic tear-down keeps Wi-Fi. Acceptable for the owner-only A/B toggle.
+        BikeConnectionHolder.disconnectAndClear()
         LogBus.log("→ mode switch: stop previous projection (keep Wi‑Fi)")
         try { AaVideoBridge.onSteadyVideo = null } catch (_: Exception) {}
         AaVideoBridge.pipeline = null
@@ -238,8 +220,8 @@ object CfmotoConnect {
         if (qr.supportsPhoneHotspot && qr.pwd.isEmpty()) {
             // A BLE-capable phone-hotspot QR (Rieju/Carbit action=128 carrying a bm= mac) goes through the
             // NEW PhoneHotspotTransport (P2P group-owner + BLE B360 0x52 credential push, with a readable-
-            // creds manual fallback on BLE failure). INDEPENDENT of USE_FACTORY — that flag gates ONLY the
-            // 450NK SoftAP/P2P classic path below, which stays byte-for-byte unchanged.
+            // creds manual fallback on BLE failure). INDEPENDENT of the dev toggle — the toggle gates ONLY the
+            // 450NK SoftAP/P2P classic path below, which stays byte-for-byte unchanged when it is OFF.
             if (isBleHotspot(qr)) {
                 if (activity == null) {
                     // Background can't create the P2P group or show the assist — mirror joinPhoneHotspot's guard.
@@ -247,19 +229,26 @@ object CfmotoConnect {
                     ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
                     return
                 }
-                LogBus.log("→ [FACTORY] BLE phone-hotspot '${qr.ssid}' mac=${qr.mac} → PhoneHotspotTransport (independent of USE_FACTORY)")
-                BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO).connect()
+                LogBus.log("→ [FACTORY] BLE phone-hotspot '${qr.ssid}' mac=${qr.mac} → PhoneHotspotTransport (independent of the dev toggle)")
+                val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
+                BikeConnectionHolder.set(conn) // single source of truth for "a factory connection is live" (design §1)
+                conn.connect()
                 return
             }
             // Phone-hotspot WITHOUT a BLE mac → the old manual tether assist, unchanged.
             joinPhoneHotspot(context, qr, gateOnAaSteady, activity)
             return
         }
-        // Everything past this point is a SoftAP- or P2P-capable QR (phone-hotspot already returned
-        // above) — the two transports BikeConnectionFactory.selectTransport currently drives end-to-end.
-        if (USE_FACTORY) {
-            LogBus.log("→ [FACTORY] joinWifi: routing '${qr.ssid}' through BikeConnectionFactory (flagged)")
-            BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO).connect()
+        // Everything past this point is a SoftAP- or P2P-capable QR (phone-hotspot already returned above).
+        // DEV A/B toggle (default OFF = classic below runs byte-for-byte): route SoftAP/P2P through the
+        // factory, but ONLY off the Android-Auto path — the factory doesn't implement the gateOnAaSteady
+        // hand-off, so AA connects stay classic regardless of the toggle (flip-work-design.md §6). Retain the
+        // handle in BikeConnectionHolder BEFORE connect() so teardown and Wi-Fi re-acquire can always find it.
+        if (!gateOnAaSteady && AppSettings.useConnectionFactory(context)) {
+            LogBus.log("→ [FACTORY] joinWifi: routing '${qr.ssid}' via factory (dev toggle; non-AA path)")
+            val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
+            BikeConnectionHolder.set(conn)
+            conn.connect()
             return
         }
         // AUTO: P2P when the QR is P2P-only (incl. non-DIRECT SSIDs — join by MAC), or DIRECT-*.
@@ -889,6 +878,9 @@ object CfmotoConnect {
      * down any Wi‑Fi Direct (P2P) group. No MediaProjection teardown (mirror-only, stays in MainActivity).
      */
     fun stop(context: Context) {
+        // Tear down a live factory connection FIRST (no-op when the dev toggle is OFF / no factory connection
+        // is held); the classic teardown below then runs byte-for-byte — both are idempotent (design §4).
+        BikeConnectionHolder.disconnectAndClear()
         LogBus.log("→ stopping bike projection (cockpit)")
         try { AaVideoBridge.onSteadyVideo = null } catch (_: Exception) {}
         try { AndroidAutoService.stop(context) } catch (e: Exception) { LogBus.log("AA stop: $e") }

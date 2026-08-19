@@ -946,6 +946,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopEverything() {
+        // Clear a live factory connection first (no-op when the dev toggle is OFF); classic teardown below is
+        // unchanged. MainActivity ("Original mode") can also start a factory connect via joinWifi (design §4).
+        dev.zanderp.opencfmoto.connection.BikeConnectionHolder.disconnectAndClear()
         log("→ stopping everything (Android Auto + bike)")
         try { AaVideoBridge.onSteadyVideo = null } catch (_: Exception) {}
         try { AndroidAutoService.stop(this) } catch (e: Exception) { log("AA stop: $e") }

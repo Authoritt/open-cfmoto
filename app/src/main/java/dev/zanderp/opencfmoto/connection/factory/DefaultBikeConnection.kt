@@ -4,6 +4,7 @@
 package dev.zanderp.opencfmoto.connection.factory
 
 import android.content.Context
+import android.net.Network
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -145,6 +146,16 @@ class DefaultBikeConnection(
     /** Last good endpoint. Non-null means the transport is up, so a link drop re-establishes Layer 2 only. */
     private var endpoint: BikeEndpoint? = null
 
+    /**
+     * Fresh [Network] handed in by a Wi-Fi re-acquire ([onWifiReacquired]); consumed by the driver coroutine
+     * on the next [ConnEvent.LinkDropped] to refresh the endpoint before re-establishing (design §3). A
+     * `@Volatile` HINT written from a caller thread (NOT a driver-confined field): last-write-wins is correct —
+     * the newest re-acquired network is exactly what we want to re-establish on. A stale endpoint Network is
+     * fatal to `EasyConnProber.start` (null link props → abort), so the fresh one MUST reach the prober.
+     */
+    @Volatile
+    private var reacquiredNetwork: Network? = null
+
     override fun connect() {
         synchronized(lifecycleLock) {
             // Idempotency guard: a healthy/starting driver is left alone, so a redundant or auto-connect
@@ -175,6 +186,19 @@ class DefaultBikeConnection(
     }
 
     /**
+     * Wi-Fi re-acquire hinge (design §3), called from the shared `BikeWifi` callback thread via
+     * `BikeConnectionHolder`/`BikeLink.onWifiReacquired`: stash the fresh [network] and enqueue a
+     * [ConnEvent.LinkDropped] so the driver re-establishes the LINK on it (transport kept up). Safe with no
+     * live driver — the event lands in the UNLIMITED channel and is drained on the next `supervise()` (or GC'd
+     * with it); the `@Volatile` write is last-write-wins. The raised SoftAP/P2P caps keep the driver — and
+     * thus this event's receiver — alive across a long outage so a later re-acquire always recovers (design §2).
+     */
+    override fun onWifiReacquired(network: Network?) {
+        reacquiredNetwork = network
+        events.trySend(ConnEvent.LinkDropped("wifi re-acquired"))
+    }
+
+    /**
      * The lifecycle coroutine. One `try`/`finally` owns cleanup: whether the loop exits by cancellation
      * (disconnect) or by the fatal-error `return`, the `finally` tears everything down once and publishes the
      * terminal state ([ConnState.Idle] for a disconnect via the pure `Disconnected` transition, or the
@@ -199,7 +223,15 @@ class DefaultBikeConnection(
                 }
 
                 when (problem) {
-                    is ConnEvent.LinkDropped -> closeSession() // keep the transport (endpoint stays non-null)
+                    is ConnEvent.LinkDropped -> {
+                        // Driver-coroutine-only mutation (respects the F1-F4 endpoint confinement): if a Wi-Fi
+                        // re-acquire handed us a fresh Network, swap it into the endpoint so establishAnyLink
+                        // re-runs the prober on the LIVE net — a stale endpoint Network aborts
+                        // EasyConnProber.start (null link props → "could not resolve our IPv4"), design §3.
+                        reacquiredNetwork?.let { fresh -> endpoint = endpoint?.copy(network = fresh) }
+                        reacquiredNetwork = null
+                        closeSession() // keep the transport (endpoint stays non-null) — re-establish the link only
+                    }
                     is ConnEvent.TransportLost -> {
                         closeSession()
                         closeTransport() // endpoint -> null, so the next pass re-opens the transport first

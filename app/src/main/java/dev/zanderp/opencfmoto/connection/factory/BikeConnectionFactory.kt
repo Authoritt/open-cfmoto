@@ -35,11 +35,19 @@ object BikeConnectionFactory {
      */
     fun create(ctx: Context, qr: QrData, memory: BikeMemory, io: PlatformIO): BikeConnection {
         val spec = memory.specFor(ctx, qr) ?: ConnectionSpec.fromQr(qr)
+        // Reconnect parity (flip-work-design.md §2): the classic 450NK path retries FOREVER (BikeWifi keeps
+        // the WifiNetworkSpecifier request pending and re-grabs the AP the instant it returns), so the
+        // daily-driver SoftAP/P2P factory path must not self-terminate on a long outage or a flap — an ended
+        // driver has no receiver for a later re-acquire. PHONE_HOTSPOT (Rieju) keeps the default caps: a
+        // one-shot BLE handoff with a manual fallback, not a daily-ride reconnect.
+        val soft = spec.mode == TransportKind.SOFT_AP || spec.mode == TransportKind.P2P
         return DefaultBikeConnection(
             transport = selectTransport(spec),
             links = listOf(EasyConnBikeLink(), YunmoBikeLink()),
             spec = spec,
             io = io,
+            maxAttempts = if (soft) Int.MAX_VALUE else MAX_ATTEMPTS,
+            flapMaxFailures = if (soft) Int.MAX_VALUE else FLAP_MAX_FAILURES,
             onConnected = { saved ->
                 memory.saveSpec(ctx, saved)
                 // Record the REAL transport outcome (saveSpec no longer mirrors spec.mode — that was a
