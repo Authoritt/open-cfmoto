@@ -105,10 +105,16 @@ class BleApInfoPush(
 
         val adapter = btManager?.adapter
         if (adapter == null || !adapter.isEnabled) { finishFailure("Bluetooth adapter unavailable/off"); return@suspendCancellableCoroutine }
+        // Android validates the address with BluetoothAdapter.checkBluetoothAddress(), which demands
+        // UPPERCASE hex — "dd:0d:30:16:6b:50" is rejected as "not a valid Bluetooth address" while the
+        // identical "DD:0D:30:16:6B:50" is accepted. The QR carries it uppercase (bm=DD:0D:…); our own
+        // MAC normalisation lowercases it, and that is what reached this call and killed the very first
+        // real Rieju attempt AFTER the group had already formed and the frames were built.
+        val btMac = mac.uppercase()
         val device = try {
-            adapter.getRemoteDevice(mac)
+            adapter.getRemoteDevice(btMac)
         } catch (e: Exception) {
-            finishFailure("bad BLE MAC '$mac': ${e.message}"); return@suspendCancellableCoroutine
+            finishFailure("bad BLE MAC '$btMac': ${e.message}"); return@suspendCancellableCoroutine
         }
 
         handler.postDelayed({ if (!done) finishFailure("timeout after ${timeoutMs}ms") }, timeoutMs)
