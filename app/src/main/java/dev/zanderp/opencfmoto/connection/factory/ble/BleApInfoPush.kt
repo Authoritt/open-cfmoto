@@ -98,8 +98,10 @@ class BleApInfoPush(
         frameRequestBuild = EcBtpProtocol.build(EcBtpProtocol.CMD_REQUEST_BUILD_NET.toByte(), ByteArray(0))
         frameApInfo = EcBtpApInfo.frame(ssid = ssid, pwd = pwd, ip = ip)
         log("[BLE-AP] pushApInfo mac=$mac service=$service ssid='$ssid' pwdLen=${pwd.length} ip=$ip")
+        // CLIENT_INFO/REQUEST_BUILD have empty payloads (no secrets) — log verbatim. The 0x52 AP_INFO
+        // payload embeds ssid+pwd in cleartext, so log only cmd/len (match the fallback's pwdLen hygiene).
         log("[BLE-AP] frames: CLIENT_INFO=${hex(frameClientInfo)} REQUEST_BUILD=${hex(frameRequestBuild)} " +
-            "AP_INFO=${hex(frameApInfo)}")
+            "AP_INFO=cmd=0x52 len=${frameApInfo.size}B (payload redacted: embeds ssid+pwd)")
 
         val adapter = btManager?.adapter
         if (adapter == null || !adapter.isEnabled) { finishFailure("Bluetooth adapter unavailable/off"); return@suspendCancellableCoroutine }
@@ -248,25 +250,12 @@ class BleApInfoPush(
         if (!ok) finishFailure("writeCharacteristic submit failed at step=$step")
     }
 
-    /** Accumulate BLE chunks and extract complete EcBtp frames; a `0x51`/`0x53` reply ends the handshake. */
+    /** Accumulate BLE chunks and dispatch complete EcBtp frames; a `0x51`/`0x53` reply ends the handshake. */
     private fun handleNotification(data: ByteArray) {
-        notifyAcc += data
-        log("[BLE-AP] <- chunk(${data.size}) acc=${hex(notifyAcc)}")
-        while (true) {
-            val start = notifyAcc.indexOf(EcBtpProtocol.START)
-            if (start < 0) { notifyAcc = ByteArray(0); return }
-            if (start > 0) notifyAcc = notifyAcc.copyOfRange(start, notifyAcc.size)
-            if (notifyAcc.size < 5) return // need at least the 5-byte frame overhead
-            val declared = notifyAcc[2].toInt() and 0xFF
-            val total = declared + 1 // full frame = (declared-4 payload) + 5 overhead
-            if (total < 5) { notifyAcc = notifyAcc.copyOfRange(1, notifyAcc.size); continue } // bad len; skip this START
-            if (notifyAcc.size < total) return // wait for the rest of the frame
-            val frameBytes = notifyAcc.copyOfRange(0, total)
-            notifyAcc = notifyAcc.copyOfRange(total, notifyAcc.size)
-            val parsed = EcBtpProtocol.parse(frameBytes)
-            if (parsed == null) { log("[BLE-AP] <- dropped malformed frame ${hex(frameBytes)}"); continue }
-            onEcBtpFrame(parsed.command)
-        }
+        val batch = extractFrames(notifyAcc, data)
+        notifyAcc = batch.remainder
+        log("[BLE-AP] <- chunk(${data.size}) frames=${batch.frames.size} buffered=${notifyAcc.size}B")
+        for (f in batch.frames) onEcBtpFrame(f.command)
     }
 
     private fun onEcBtpFrame(cmd: Byte) {
@@ -286,5 +275,38 @@ class BleApInfoPush(
         val DEFAULT_SERVICE_UUID: UUID = UUID.fromString("0000B360-D6D8-C7EC-BDF0-EAB1BFC6BCBC")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
         private const val DEFAULT_TIMEOUT_MS = 25_000L
+
+        /** EcBtp frame overhead: `START | cmd | len | … | xor | END` = 5 bytes around the payload. */
+        private const val FRAME_OVERHEAD = 5
+
+        /** Result of [extractFrames]: complete EcBtp [frames] pulled out, plus the still-incomplete [remainder]. */
+        internal class FrameBatch(val remainder: ByteArray, val frames: List<EcBtpProtocol.Frame>)
+
+        /**
+         * PURE (no GATT/Android) EcBtp reassembler for BLE notifications, split out so the receive path — the
+         * only device-INDEPENDENT parse in this class — is unit-testable without a bike. Appends [incoming] to
+         * [acc], then pulls every complete frame: sync to `START 0x24`, read the declared length at index 2
+         * (`total = declared + 1`), validate via [EcBtpProtocol.parse]. Leftovers (a partial frame, or bytes
+         * with no START yet) stay in [FrameBatch.remainder] for the next chunk; a bad length byte skips one
+         * byte and resyncs; a checksum-failing frame is dropped (its region consumed).
+         */
+        internal fun extractFrames(acc: ByteArray, incoming: ByteArray): FrameBatch {
+            var buf = acc + incoming
+            val frames = ArrayList<EcBtpProtocol.Frame>()
+            while (true) {
+                val start = buf.indexOf(EcBtpProtocol.START)
+                if (start < 0) { buf = ByteArray(0); break }         // no START anywhere: nothing parseable
+                if (start > 0) buf = buf.copyOfRange(start, buf.size) // drop leading garbage before the START
+                if (buf.size < FRAME_OVERHEAD) break                 // need at least the 5-byte overhead
+                val declared = buf[2].toInt() and 0xFF
+                val total = declared + 1                             // full frame = (declared-4 payload) + 5
+                if (total < FRAME_OVERHEAD) { buf = buf.copyOfRange(1, buf.size); continue } // bad len; resync
+                if (buf.size < total) break                          // wait for the rest of the frame
+                val frameBytes = buf.copyOfRange(0, total)
+                buf = buf.copyOfRange(total, buf.size)
+                EcBtpProtocol.parse(frameBytes)?.let { frames.add(it) } // checksum fail → drop, region consumed
+            }
+            return FrameBatch(buf, frames)
+        }
     }
 }

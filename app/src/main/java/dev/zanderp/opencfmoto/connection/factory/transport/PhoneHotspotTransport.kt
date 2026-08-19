@@ -27,6 +27,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
@@ -95,7 +96,15 @@ class PhoneHotspotTransport : BikeTransport {
                     pwd = group.passphrase,
                     ip = group.goAddress.hostAddress ?: DEFAULT_GO_IP,
                 )
-            }.getOrElse { e -> log("BLE push threw: ${e.message}"); false }
+            }.getOrElse { e ->
+                // A disconnect() mid-push cancels this coroutine; pushApInfo then resumes with a
+                // CancellationException that MUST propagate to the driver's finally (a cancel is teardown,
+                // not a BLE failure — DefaultBikeConnection.kt:172-174 cancels, :195-196 rethrows). Swallowing
+                // it here would pop the manual-fallback dialog and return a phantom endpoint during a cancel.
+                if (e is CancellationException) throw e
+                log("BLE push threw: ${e.message}")
+                false
+            }
         }
 
         // 3) On any BLE failure, fall back to the improved manual flow (readable creds + 2.4 GHz note).
