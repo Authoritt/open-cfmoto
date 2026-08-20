@@ -219,8 +219,20 @@ class EasyConnProber(
         }
 
         // 2. Discover EasyConn (NSD → :10930 wake → nearby port scan), then MDNS_RESPOND.
-        thread(name = "ec-probe", isDaemon = true) {
-            discoverAndProbe(bikeIp, myIp, network)
+        //
+        // …unless the "bike" resolved to our OWN address. On the phone-hotspot path we are the Wi-Fi
+        // Direct group owner, so the gateway IS us (192.168.49.1) and the dash is a client that dials
+        // INTO the ports opened above. Probing then means probing ourselves: the port scan connects to
+        // our own 10920-10922, our servers accept, and the link announces "bike connected … media
+        // closed" and then "Link dropped — reconnecting" without a single byte from the bike. The
+        // 19-Aug Rieju log shows the whole phantom inside 40 ms at 22:38:18 — noise that burns the
+        // reconnect budget and makes the log claim a connection that never happened.
+        if (bikeIp == myIp) {
+            log("we are the group owner (${myIp.hostAddress}) — the dash dials in to us, so there is nothing to probe; waiting on the listening ports (a scan here would only find ourselves)")
+        } else {
+            thread(name = "ec-probe", isDaemon = true) {
+                discoverAndProbe(bikeIp, myIp, network)
+            }
         }
         startHeartbeatLog()
         stitchExec = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->

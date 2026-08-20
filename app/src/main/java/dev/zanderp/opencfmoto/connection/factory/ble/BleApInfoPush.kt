@@ -95,6 +95,9 @@ class BleApInfoPush(
     /** Bounded wait for the dash's `0x50` reply; removed the moment it lands (or fires once and gives up). */
     @Volatile private var netReplyTimeout: Runnable? = null
 
+    /** The repeating `0x50` poll that runs while we wait for the dash to finish joining. */
+    @Volatile private var netPoll: Runnable? = null
+
     /**
      * The `status` the dash reported in its `0x50` reply (`2` on the Rieju Aventure 500, 2026-08-19), or null
      * if it never answered. **Data, not a verdict** — see [awaitNetReply]. The caller logs it; nothing branches
@@ -377,6 +380,7 @@ class BleApInfoPush(
         session = Session.DEAD
         netReplyTimeout?.let { handler.removeCallbacks(it) } // no "the dash didn't answer" line after teardown
         netReplyTimeout = null
+        cancelNetPoll()
         val g = gatt
         gatt = null
         try { g?.disconnect() } catch (_: Exception) {}
@@ -401,6 +405,7 @@ class BleApInfoPush(
 
     /** The funnel every verdict goes through: at most one resume per phase, timer always cancelled. */
     private fun settlePhase(ok: Boolean) {
+        cancelNetPoll()
         val ph = phase ?: return
         if (!ph.settled.compareAndSet(false, true)) return
         phase = null
@@ -430,6 +435,39 @@ class BleApInfoPush(
         }
         netReplyTimeout = timeout
         handler.postDelayed(timeout, NET_REPLY_TIMEOUT_MS)
+    }
+
+    /**
+     * Keep ASKING while the dash joins, because the dash answers when asked — it does not volunteer.
+     *
+     * We used to fire `0x52` and then sit on the line waiting for an unsolicited `0x51`/`0x53`. On
+     * 2026-08-19 the Rieju did everything right — answered `0x50` with `status=2`, took the creds — and we
+     * still timed out after 20 s, because nothing was ever coming. The official app never waits like that:
+     * `SdpBluetoothUtil.processRequestBuildNet` runs a `while (true)` that re-sends the build request every
+     * 1-2 s and reads the `status` in each reply, treating the request as a POLL. `2` (USE_PHONE_AP) means
+     * "keep hosting, I'm working on it"; the handoff is done when the dash finally answers `0` (SUCCEED).
+     *
+     * So: same cadence Carbit uses, same terminating condition. A `0x51`/`0x53` still completes it if this
+     * dash happens to send one — this only removes our dependence on it.
+     */
+    private fun startNetPoll(g: BluetoothGatt) {
+        cancelNetPoll()
+        log("[BLE-AP] AP_INFO sent; now polling 0x50 every ${NET_POLL_INTERVAL_MS}ms until the dash reports status=0 (SUCCEED) — the official app's own loop")
+        val r = object : Runnable {
+            override fun run() {
+                if (step != Step.AWAIT_ACK) return
+                log("[BLE-AP] -> 0x50 (poll: has the dash joined yet?)")
+                writeFrame(g, frameRequestBuild)
+                handler.postDelayed(this, NET_POLL_INTERVAL_MS)
+            }
+        }
+        netPoll = r
+        handler.postDelayed(r, NET_POLL_INTERVAL_MS)
+    }
+
+    private fun cancelNetPoll() {
+        netPoll?.let { handler.removeCallbacks(it) }
+        netPoll = null
     }
 
     /** Phase 1 done: the dash has been asked and a network is expected. The link stays up for phase 2. */
@@ -503,7 +541,7 @@ class BleApInfoPush(
                 Step.CLIENT_INFO -> { step = Step.REQUEST_BUILD; log("[BLE-AP] -> 0x50 REQUEST_BUILD_NET"); writeFrame(g, frameRequestBuild) }
                 // Our write is out — but phase 1 ends when the DASH answers it, not here.
                 Step.REQUEST_BUILD -> awaitNetReply()
-                Step.AP_INFO -> { step = Step.AWAIT_ACK; log("[BLE-AP] AP_INFO sent; awaiting 0x51/0x53 from dash") }
+                Step.AP_INFO -> { step = Step.AWAIT_ACK; startNetPoll(g) }
                 Step.IDLE, Step.AWAIT_NET_REPLY, Step.NET_REQUESTED, Step.AWAIT_ACK -> {}
             }
         }
@@ -604,6 +642,19 @@ class BleApInfoPush(
                 log("[BLE-AP] <- 0x50 response status=${status ?: "(none in payload)"} — recorded, not judged")
                 finishHandshake(answered = true)
             }
+            // A reply to one of our polls (above). `0` = SUCCEED: the dash is on the network and the handoff
+            // is done — that is the completion signal Carbit waits for. Anything else means "not yet", so we
+            // keep asking until the phase budget runs out.
+            c == EcBtpProtocol.CMD_REQUEST_BUILD_NET && step == Step.AWAIT_ACK -> {
+                val status = netBuildStatus(frame.payload)
+                lastNetBuildStatus = status
+                if (status == "0") {
+                    log("[BLE-AP] <- 0x50 poll answered status=0 (SUCCEED) — the dash JOINED the group")
+                    finishSuccess()
+                } else {
+                    log("[BLE-AP] <- 0x50 poll answered status=${status ?: "(none)"} — not joined yet, asking again")
+                }
+            }
             // Only an ack that answers OUR credentials completes the handoff. One arriving earlier is reported
             // and nothing more: inventing a success out of a frame we never asked for is how a connector
             // starts lying about the bike.
@@ -631,8 +682,11 @@ class BleApInfoPush(
         /** Phase 1 budget: the 6 s scan, the connect, discovery, MTU, CCCD and two writes (the old total). */
         private const val CONNECT_TIMEOUT_MS = 25_000L
 
-        /** Phase 2 budget: one write plus the dash JOINING the group before it answers — association + DHCP. */
-        private const val AP_INFO_TIMEOUT_MS = 20_000L
+        /** Phase 2 budget: the creds write plus association + DHCP on the dash, polled throughout. */
+        private const val AP_INFO_TIMEOUT_MS = 30_000L
+
+        /** Carbit's own re-ask cadence in `processRequestBuildNet` (`Thread.sleep(2000)`). */
+        private const val NET_POLL_INTERVAL_MS = 2_000L
 
         /**
          * Grace for the dash's own `0x50` reply. The real Rieju answered in 45 ms; this is deliberately short

@@ -543,7 +543,10 @@ class AndroidAutoService : Service() {
 
     /** Keep AVRCP capture alive for AA and for Map (same ButtonMap presets). */
     private fun ensureMediaButtons() {
-        if (mediaButtons != null) return
+        // Already running: do not rebuild it, but DO re-decide who owns the handlebar. This path is hit
+        // when the map starts projecting after the bridge was created (AA→Map switch, or a lingering
+        // FGS), and that decision is what routes ▲/▼ to the dash instead of the phone's volume.
+        mediaButtons?.let { it.refreshCapturePolicy(); return }
         if (!canCaptureHandlebarButtons()) {
             // Bluetooth off (or CONNECT not granted) at this instant. This used to just log and give
             // up FOREVER: nothing re-ran this, so a rider who turned Bluetooth on afterwards got a

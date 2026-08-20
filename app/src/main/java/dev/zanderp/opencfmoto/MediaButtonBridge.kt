@@ -553,7 +553,17 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
                     handler.postDelayed(this, ABSENT_VOLUME_PROBE_MS / 3)
                     return
                 }
-                log("[BTN] no volume ▲/▼ for ${ABSENT_VOLUME_PROBE_MS / 1000}s while streaming — marking rocker ABSENT, unpinning")
+                // "No ▲/▼ in 90s" is NOT proof the pod lacks a rocker: it is equally the signature of a
+                // rider who simply did not touch it — the normal case (connect, map comes up, ride). Marking
+                // ABSENT on that evidence is exactly what silently demoted the 450NK's arrows to phone
+                // volume. Conclude ABSENT only when the handlebar PROVED it can talk to us (track keys
+                // arrived) and the rocker alone stayed quiet — the real signature of a pod without ▲/▼
+                // (e.g. the 800NK Adventure this probe was written for). Otherwise keep waiting.
+                if (ButtonPresencePrefs.trackKeys(context) != ButtonPresence.PRESENT) {
+                    handler.postDelayed(this, ABSENT_VOLUME_PROBE_MS)
+                    return
+                }
+                log("[BTN] track keys work but no volume ▲/▼ for ${ABSENT_VOLUME_PROBE_MS / 1000}s while streaming — this pod has no rocker: marking ABSENT, unpinning")
                 ButtonPresencePrefs.setVolumeRocker(context, ButtonPresence.ABSENT)
                 unpinVolume()
             }
@@ -565,6 +575,23 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
     private fun cancelAbsentVolumeProbe() {
         absentVolumeProbe?.let { handler.removeCallbacks(it) }
         absentVolumeProbe = null
+    }
+
+    /**
+     * Re-decide [capturingForDash] against the CURRENT world and apply it.
+     *
+     * The decision used to be frozen at [start]: the service starts the bridge on ACTION_GPX_WAKE, and
+     * if [GpxSession.active] had not flipped yet the own-map leg read false, the session was left
+     * inactive and nothing ever re-ran the check — the whole ride went by with the handlebar on plain
+     * phone volume. Called from the service every time it (re)enters a projecting state; idempotent.
+     */
+    fun refreshCapturePolicy() {
+        handler.post {
+            val on = capturingForDash()
+            if (session?.isActive == on) return@post
+            log("[BTN] capture policy re-evaluated — now ${if (on) "ON (dash owns the handlebar)" else "OFF (media/volume)"}")
+            setCaptureActive(on)
+        }
     }
 
     /** Re-arm the absent probe after Teach resets presence to UNKNOWN, or capture toggles on. */
@@ -637,7 +664,24 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             override fun onChange(selfChange: Boolean) {
                 if (ignoreVolumeChanges) return
                 val now = try { audio.getStreamVolume(AudioManager.STREAM_MUSIC) } catch (e: Exception) { return }
-                if (!capturingForDash() || pinnedVolume < 0) return
+                if (!capturingForDash()) return
+                if (pinnedVolume < 0) {
+                    // Unpinned means we concluded this bike has no ▲/▼ rocker. A volume change we did NOT
+                    // cause, while the bike is streaming, is proof of the opposite — and until now that proof
+                    // was unreachable: markVolumeSeen() sat BELOW this return, so ABSENT could never clear
+                    // itself. Once set, the rocker drove phone volume for the rest of that bike's life
+                    // (reported twice from the bike as "the arrows still change the phone's volume").
+                    // Learn here, re-pin, and let the next press navigate.
+                    // Trade-off, out loud: if the rider moved volume with the PHONE's own keys mid-projection
+                    // we re-pin wrongly — one tap to undo (Controls → ▲▼ Volume), against a silent dead end.
+                    if (BikeLink.prober?.isStreaming == true) {
+                        log("[BTN] volume moved while unpinned and the bike is streaming — the ▲/▼ rocker EXISTS after all; re-pinning so it navigates")
+                        ButtonPresencePrefs.markVolumeSeen(context)
+                        cancelAbsentVolumeProbe()
+                        maybePinVolume("rocker proved itself")
+                    }
+                    return
+                }
                 if (now == pinnedVolume) return   // our own re-pin, or nothing to do
 
                 val jump = now - pinnedVolume            // signed, in Android volume steps
