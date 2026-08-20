@@ -89,6 +89,9 @@ class PhoneHotspotTransport(
     @Volatile private var channel: WifiP2pManager.Channel? = null
     @Volatile private var receiver: BroadcastReceiver? = null
     @Volatile private var appContext: Context? = null
+
+    /** The local-only hotspot reservation, when the AP route was used. Released in [close]. */
+    @Volatile private var hotspot: WifiManager.LocalOnlyHotspotReservation? = null
     @Volatile private var blePush: BleApInfoPush? = null
     @Volatile private var logCb: (String) -> Unit = {}
 
@@ -159,7 +162,11 @@ class PhoneHotspotTransport(
         // ship a guess and cost another rider another day, the same connector now offers the only other legal
         // band before giving up. This is NOT a fallback to another connector: the mechanism, the dash and the
         // credentials are identical — only the channel changes.
-        val bands = listOf(CarbitGroupConfig.BAND, WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
+        // 2.4 GHz first. Carbit asks for 5 GHz only because it has nothing better to go on; we DO have
+        // something better — the dash module in the Rieju is a Feasycom FSC-BW121 (owner, 2026-08-20), a
+        // 2.4 GHz combo part, and the field logs show 5 GHz ignored every time. Offering the band the radio
+        // cannot even see first is 15 s of a rider's patience spent on nothing.
+        val bands = listOf(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ, CarbitGroupConfig.BAND)
         var group: OwnerGroup? = null
         var handedOver = false
         for ((i, band) in bands.withIndex()) {
@@ -203,17 +210,24 @@ class PhoneHotspotTransport(
             // do it. An instruction that cannot be followed is worse than silence: it moves the blame onto
             // the person reading it. Say what actually happened instead, and only offer the manual route to
             // bikes that can take it.
-            // Reaching here means the spec carried a BLE MAC (the no-mac case returned through
-            // manualFallback far above), so this dash is a Carbit unit with no keyboard and no network
-            // entry screen at all.
-            log(
-                "the dash took the credentials and never joined the network — nothing for the rider to do here: " +
-                    "this dash cannot be given a network by hand. Leaving the group up in case it joins late.",
-            )
-            dev.zanderp.opencfmoto.ConnectionState.set(
-                dev.zanderp.opencfmoto.Phase.ERROR,
-                activity.getString(dev.zanderp.opencfmoto.R.string.ovk_dash_never_joined),
-            )
+            // Both Wi-Fi Direct bands were refused. Before giving anything up, offer the dash the OTHER
+            // kind of network the official app knows how to make.
+            //
+            // A Wi-Fi Direct group and a local-only hotspot look nothing alike on the air: the first is a
+            // P2P group owner (WFD information elements, and a DIRECT- SSID the framework forces on us),
+            // the second is a plain infrastructure AP. Plenty of embedded Wi-Fi chipsets can join an AP and
+            // cannot join a P2P group at all — which is exactly what this dash has looked like for five
+            // sessions: it asks for a network, takes the credentials, answers every poll, and never
+            // associates. `WifiHotspotUtils.createAP_p()` is Carbit's own path for this, on public API
+            // (`startLocalOnlyHotspot`, API 26+). If Carbit can do it, so can this app.
+            val viaHotspot = runCatching { offerLocalOnlyHotspot(appCtx, pusher, log) }
+                .getOrElse { e ->
+                    if (e is CancellationException) throw e
+                    log("local-only hotspot threw: ${e.message}")
+                    null
+                }
+            if (viaHotspot != null) return viaHotspot
+            log("the dash took the credentials and never joined, on either kind of network")
         }
 
         // 4) Endpoint: phone is GO + PXC server at its GO address. No bindable Network (P2P), so the link
@@ -524,6 +538,80 @@ class PhoneHotspotTransport(
         else -> if (fiveGhzSupported) "AUTO" else "AUTO (this phone reports no 5 GHz)"
     }
 
+    /**
+     * The other kind of network: a plain infrastructure AP instead of a Wi-Fi Direct group.
+     *
+     * Android picks the SSID and passphrase (an app cannot choose them here), which costs us nothing — the
+     * dash is TOLD both over BLE, exactly as with the group. What changes is what the dash sees on the air:
+     * a normal access point rather than a P2P group owner. Returns an endpoint when the dash finally
+     * reports SUCCEED, or null so the caller can carry on failing honestly.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun offerLocalOnlyHotspot(
+        appCtx: Context,
+        pusher: BleApInfoPush,
+        log: (String) -> Unit,
+    ): BikeEndpoint? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+        val wifi = appCtx.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
+        log("Wi-Fi Direct was refused on both bands — asking Android for a plain access point instead (the official app calls this createAP_p)")
+        releaseGroup(log)
+
+        val started = kotlinx.coroutines.suspendCancellableCoroutine<Triple<String, String, Inet4Address>?> { cont ->
+            val cb = object : WifiManager.LocalOnlyHotspotCallback() {
+                override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
+                    hotspot = reservation
+                    @Suppress("DEPRECATION")
+                    val cfg = runCatching { reservation.wifiConfiguration }.getOrNull()
+                    val ssid = cfg?.SSID?.trim('"').orEmpty()
+                    val pwd = cfg?.preSharedKey?.trim('"').orEmpty()
+                    val ip = apInterfaceIp()
+                    if (ssid.isBlank() || pwd.isBlank() || ip == null) {
+                        log("access point is up but Android did not tell us ssid/pwd/ip (ssid='$ssid' ip=$ip) — cannot hand it over")
+                        if (cont.isActive) cont.resumeWith(Result.success(null))
+                        return
+                    }
+                    log("access point up: ssid='$ssid' pwdLen=${pwd.length} ip=${ip.hostAddress} — a normal AP, not a Wi-Fi Direct group")
+                    if (cont.isActive) cont.resumeWith(Result.success(Triple(ssid, pwd, ip)))
+                }
+
+                override fun onFailed(reason: Int) {
+                    log("access point refused by Android (reason=$reason)")
+                    if (cont.isActive) cont.resumeWith(Result.success(null))
+                }
+            }
+            runCatching { wifi.startLocalOnlyHotspot(cb, handler) }.onFailure { e ->
+                log("startLocalOnlyHotspot threw: ${e.message}")
+                if (cont.isActive) cont.resumeWith(Result.success(null))
+            }
+        } ?: return null
+
+        val (ssid, pwd, ip) = started
+        val host = ip.hostAddress ?: return null
+        val ok = pusher.sendApInfo(ssid = ssid, pwd = pwd, ip = host)
+        if (!ok) {
+            log("the dash did not join the access point either")
+            return null
+        }
+        log("*** the dash JOINED the access point — Wi-Fi Direct was the problem all along ***")
+        return BikeEndpoint(
+            network = null,
+            host = ip,
+            bindIp = ip,
+            kind = TransportKind.PHONE_HOTSPOT,
+            phoneIsServer = true,
+        )
+    }
+
+    /** Our IPv4 on whatever interface the access point came up on (`ap0`, `wlan1`, …). */
+    private fun apInterfaceIp(): Inet4Address? = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }
+            .filterIsInstance<Inet4Address>()
+            .firstOrNull { it.isSiteLocalAddress && it.hostAddress?.endsWith(".1") == true }
+    }.getOrNull()
+
     /** Drop the current group so the next attempt can offer the same network on another channel. */
     private suspend fun releaseGroup(log: (String) -> Unit) {
         val mgr = manager
@@ -567,6 +655,8 @@ class PhoneHotspotTransport(
     }
 
     override fun close() {
+        runCatching { hotspot?.close() }
+        hotspot = null
         val ctx = appContext
         if (ctx != null) unregisterReceiver(ctx)
         runCatching { blePush?.close() }
