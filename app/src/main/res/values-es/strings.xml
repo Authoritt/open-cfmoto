@@ -532,6 +532,8 @@
     <string name="main_phone_hotspot_settings_failed">No se pudieron abrir los ajustes del punto de acceso: ábrelos manualmente</string>
     <string name="main_phone_hotspot_cancelled">Configuración del punto de acceso cancelada</string>
     <string name="main_phone_hotspot_waiting_named">Esperando al punto de acceso \"%1$s\": la moto debería conectarse a tu teléfono</string>
+    <string name="main_phone_hotspot_readable_title">Escribe esta Wi-Fi en el tablero</string>
+    <string name="main_phone_hotspot_readable_message">Tu teléfono ya está creando la Wi-Fi. En la pantalla de emparejamiento del tablero, escribe:\n\nRed: %1$s\nClave: %2$s\nIP del teléfono: %3$s\n\nSi el tablero no la encuentra, puede que solo admita Wi-Fi de 2,4 GHz.</string>
     <string name="main_donate_failed">No se pudo abrir el enlace de donación</string>
     <string name="main_settings_failed">No se pudo abrir la configuración de la aplicación</string>
     <string name="main_download_failed">No se pudo abrir el enlace de descarga</string>

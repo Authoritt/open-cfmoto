@@ -3,6 +3,7 @@ package dev.zanderp.opencfmoto.connection.factory.ble
 import dev.zanderp.opencfmoto.EcBtpProtocol
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -78,4 +79,46 @@ class BleApInfoPushTest {
         assertArrayEquals(bad, r.dropped[0])
         assertEquals(0, r.remainder.size)
     }
+
+    // ---- The dash's own 0x50 reply (real bytes, Rieju Aventure 500, 2026-08-19 21:39:06) ------------------
+    // The frame the connector used to decode and throw away while it waited for a 0x51/0x53 that never came.
+    // It arrived split over three notifications, exactly as reproduced here.
+
+    private val realChunk1 = bytes("24 50 14 7b 0a 09 22 73 74 61")
+    private val realChunk2 = bytes("74 75 73 22 3a 09 32 0a 7d 7a")
+    private val realChunk3 = bytes("0a")
+
+    @Test fun `the real 0x50 reply reassembles from the three notifications the bike sent`() {
+        val r1 = BleApInfoPush.extractFrames(empty, realChunk1)
+        assertEquals("nothing complete yet", 0, r1.frames.size)
+        val r2 = BleApInfoPush.extractFrames(r1.remainder, realChunk2)
+        assertEquals("still one byte short of the frame", 0, r2.frames.size)
+        val r3 = BleApInfoPush.extractFrames(r2.remainder, realChunk3)
+        assertEquals(1, r3.frames.size)
+        assertEquals("the dash answers REQUEST_BUILD_NET with the same cmd", 0x50.toByte(), r3.frames[0].command)
+        assertEquals("{\n\t\"status\":\t2\n}", r3.frames[0].payload.toString(Charsets.UTF_8))
+        assertEquals(0, r3.remainder.size)
+        assertEquals(0, r3.dropped.size)
+    }
+
+    @Test fun `the status the bike reported is read out of that payload`() {
+        val payload = BleApInfoPush.extractFrames(
+            empty,
+            realChunk1 + realChunk2 + realChunk3,
+        ).frames.single().payload
+        assertEquals("2", BleApInfoPush.netBuildStatus(payload))
+    }
+
+    @Test fun `a status without the dash's tabs and newlines reads the same`() {
+        assertEquals("0", BleApInfoPush.netBuildStatus("""{"status":0}""".toByteArray()))
+        assertEquals("-1", BleApInfoPush.netBuildStatus("""{ "status" : -1 , "x": 9 }""".toByteArray()))
+    }
+
+    @Test fun `a payload with no status is null, not an invented value`() {
+        assertNull(BleApInfoPush.netBuildStatus("""{"state":2}""".toByteArray()))
+        assertNull(BleApInfoPush.netBuildStatus(ByteArray(0)))
+    }
+
+    private fun bytes(hex: String): ByteArray =
+        hex.trim().split(" ").map { it.toInt(16).toByte() }.toByteArray()
 }
