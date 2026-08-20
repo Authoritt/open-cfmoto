@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.AaVideoBridge
+import dev.zanderp.opencfmoto.ButtonPresence
+import dev.zanderp.opencfmoto.ButtonPresencePrefs
 import dev.zanderp.opencfmoto.HandlebarVolumeMode
 import dev.zanderp.opencfmoto.MapInputBridge
 import dev.zanderp.opencfmoto.MediaButtonBridge
@@ -112,6 +114,21 @@ fun ControlsScreen(nav: NavController) {
                 HandlebarVolumeMode.set(ctx, true); navMode = true
             }
         }
+
+        // What the app BELIEVES about this bike's rocker. It used to decide that on its own, silently
+        // override the toggle above and leave the arrows on phone volume with nothing on screen to explain
+        // it. Invisible state is what made that bug survive three reports — so it is on screen now.
+        Text(
+            stringResource(
+                when (ButtonPresencePrefs.volumeRocker(ctx)) {
+                    ButtonPresence.PRESENT -> R.string.ovk_btn_rocker_works
+                    ButtonPresence.ABSENT -> R.string.ovk_btn_rocker_absent
+                    ButtonPresence.UNKNOWN -> R.string.ovk_btn_rocker_untested
+                },
+            ),
+            color = c.inkDim,
+            fontSize = 11.sp,
+        )
 
         // Voice / Home / Back
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

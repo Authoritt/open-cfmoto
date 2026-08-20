@@ -708,6 +708,9 @@
     <string name="ovk_controls_subtitle">The dash without touching it</string>
     <string name="ovk_volume">Volume</string>
     <string name="ovk_navigate">Navigate</string>
+    <string name="ovk_btn_rocker_works">▲▼ rocker: detected on this bike</string>
+    <string name="ovk_btn_rocker_absent">▲▼ rocker: not detected — set Navigate to use it anyway</string>
+    <string name="ovk_btn_rocker_untested">▲▼ rocker: not seen yet on this bike</string>
     <string name="ovk_voice">Voice</string>
     <string name="ovk_home">Home</string>
     <string name="ovk_back">Back</string>

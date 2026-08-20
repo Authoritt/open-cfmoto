@@ -71,6 +71,9 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
     private var pinnedVolume = -1
     /** One-shot guard: the dash only needs re-reading once per session. See [reassert]. */
     private var reasserted = false
+    /** Last level we know the stream held — the baseline a press is measured against while unpinned. */
+    @Volatile private var lastVolume = -1
+
     /** The user's own volume, restored when capture is turned off. */
     private var userVolume = -1
     /**
@@ -496,6 +499,13 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             }
             return
         }
+        // Explicitly set to Navigate: pin no matter what the presence guess says. If the rider told us
+        // the arrows should drive the dash, an inference that "this pod has no rocker" does not get to
+        // quietly cancel that — being wrong here costs one toggle, being wrong the other way cost a ride.
+        if (HandlebarVolumeMode.isExplicit(context) && !ButtonPresencePrefs.shouldPinVolume(context)) {
+            log("[BTN] presence says the rocker is absent, but ▲/▼ are set to Navigate by hand — the rider's choice wins; pinning anyway")
+            ButtonPresencePrefs.setVolumeRocker(context, ButtonPresence.UNKNOWN)
+        }
         if (!ButtonPresencePrefs.shouldPinVolume(context)) {
             if (pinnedVolume >= 0) {
                 log("[BTN] skip pin ($reason) — volume rocker ABSENT; unpinning")
@@ -527,6 +537,7 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             } finally {
                 handler.postDelayed({ ignoreVolumeChanges = false }, 150)
             }
+            lastVolume = pinnedVolume
             log("[BTN] volume pinned at $pinnedVolume/$max (listening=$userVolume)")
         } catch (e: Exception) {
             log("[BTN] pinVolume failed: $e")
@@ -544,6 +555,9 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
         cancelAbsentVolumeProbe()
         if (!capturingForDash()) return
         if (ButtonPresencePrefs.volumeRocker(context) != ButtonPresence.UNKNOWN) return
+        // Nothing to diagnose when the rider already told us: this probe exists to spare pods that have no
+        // rocker from a pinned volume, not to second-guess a setting someone opened Controls to change.
+        if (HandlebarVolumeMode.isExplicit(context)) return
         val r = object : Runnable {
             override fun run() {
                 if (!capturingForDash()) return
@@ -615,6 +629,7 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             } finally {
                 handler.postDelayed({ ignoreVolumeChanges = false }, 150)
             }
+            lastVolume = userVolume
             userVolume = -1
         }
     }
@@ -660,43 +675,62 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
      */
     private fun startVolumeObserver() {
         if (volumeObserver != null) return
+        lastVolume = try { audio.getStreamVolume(AudioManager.STREAM_MUSIC) } catch (_: Exception) { -1 }
         val obs = object : ContentObserver(handler) {
             override fun onChange(selfChange: Boolean) {
                 if (ignoreVolumeChanges) return
                 val now = try { audio.getStreamVolume(AudioManager.STREAM_MUSIC) } catch (e: Exception) { return }
-                if (!capturingForDash()) return
-                if (pinnedVolume < 0) {
-                    // Unpinned means we concluded this bike has no ▲/▼ rocker. A volume change we did NOT
-                    // cause, while the bike is streaming, is proof of the opposite — and until now that proof
-                    // was unreachable: markVolumeSeen() sat BELOW this return, so ABSENT could never clear
-                    // itself. Once set, the rocker drove phone volume for the rest of that bike's life
-                    // (reported twice from the bike as "the arrows still change the phone's volume").
-                    // Learn here, re-pin, and let the next press navigate.
-                    // Trade-off, out loud: if the rider moved volume with the PHONE's own keys mid-projection
-                    // we re-pin wrongly — one tap to undo (Controls → ▲▼ Volume), against a silent dead end.
-                    if (BikeLink.prober?.isStreaming == true) {
-                        log("[BTN] volume moved while unpinned and the bike is streaming — the ▲/▼ rocker EXISTS after all; re-pinning so it navigates")
-                        ButtonPresencePrefs.markVolumeSeen(context)
-                        cancelAbsentVolumeProbe()
-                        maybePinVolume("rocker proved itself")
-                    }
-                    return
-                }
-                if (now == pinnedVolume) return   // our own re-pin, or nothing to do
+                if (!capturingForDash()) { lastVolume = now; return }
 
-                val jump = now - pinnedVolume            // signed, in Android volume steps
+                // Two ways in. Normally we hold a pin and measure against it. But if the rocker was
+                // (wrongly) written off as ABSENT nothing is pinned, and the press would be invisible —
+                // that is the dead end the rider hit twice. So when ▲/▼ are SET to navigate and the bike
+                // is streaming, an unexplained volume move is proof the rocker exists: adopt it, and treat
+                // this very press as the gesture. Never in Volume mode — there the rocker is the rider's
+                // volume control and must stay theirs.
+                val relearn = pinnedVolume < 0
+                if (relearn) {
+                    if (!HandlebarVolumeMode.isNavigate(context) || BikeLink.prober?.isStreaming != true) {
+                        lastVolume = now
+                        return
+                    }
+                    log("[BTN] ▲/▼ moved while nothing was pinned and the map is streaming — the rocker EXISTS; adopting it now and using THIS press")
+                    ButtonPresencePrefs.markVolumeSeen(context)
+                    cancelAbsentVolumeProbe()
+                }
+
+                // What the volume must read once we are done: the pin, or — while adopting — whatever the
+                // rider had before the dash touched it.
+                val base = if (relearn) (if (lastVolume >= 0) lastVolume else now) else pinnedVolume
+                if (now == base) return          // our own write, or nothing to do
+                val jump = now - base            // signed, in Android volume steps
                 val up = jump > 0
                 val dir = if (up) "UP" else "DOWN"
                 ButtonPresencePrefs.markVolumeSeen(context)
                 cancelAbsentVolumeProbe()
-                // Re-pin FIRST: the gesture handling below can take a while (BACK/HOME redraw the
-                // dash), and until we re-pin, a follow-up press is measured from the wrong base.
+
+                // Put the volume back FIRST, before handling the gesture: BACK/HOME redraw the dash and
+                // take a while, and until the level is restored a follow-up press measures from the wrong
+                // base — and, on the adoption path, the rider would be left with the volume the dash set.
+                // The press must drive the map and leave no mark on their audio.
                 ignoreVolumeChanges = true
                 try {
-                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, pinnedVolume, 0)
+                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, base, 0)
                 } catch (_: Exception) {
                 } finally {
                     handler.postDelayed({ ignoreVolumeChanges = false }, 80)
+                }
+                lastVolume = base
+                if (relearn) {
+                    // Hold that same level from now on, so every later press is measured, not guessed.
+                    val max = try { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) } catch (_: Exception) { 15 }
+                    if (userVolume < 0) userVolume = base
+                    pinnedVolume = base.coerceIn(1, (max - 1).coerceAtLeast(1))
+                    if (pinnedVolume != base) {
+                        try { audio.setStreamVolume(AudioManager.STREAM_MUSIC, pinnedVolume, 0) } catch (_: Exception) {}
+                        lastVolume = pinnedVolume
+                    }
+                    log("[BTN] rocker adopted — volume restored to $base and pinned at $pinnedVolume (listening=$userVolume)")
                 }
 
                 // A big single write means the dash coalesced a double-tap into one jump — take the
@@ -707,7 +741,7 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
                 // the 800MT's ◀/▶ track keys, so both layouts drive the same gestures.
                 val single = if (up) ButtonGesture.NAV_BACK else ButtonGesture.NAV_FWD
                 val double = if (up) ButtonGesture.NAV_BACK_DOUBLE else ButtonGesture.NAV_FWD_DOUBLE
-                log("[BTN] volume $dir ($pinnedVolume→$now, jump=$jump)${if (forceDouble) " ×2" else ""}")
+                log("[BTN] volume $dir ($base→$now, jump=$jump)${if (forceDouble) " ×2" else ""}")
                 detectDoubleTap(single, double, forceDouble)
             }
         }

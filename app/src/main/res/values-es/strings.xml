@@ -696,6 +696,9 @@
     <string name="ovk_controls_subtitle">El tablero sin tocarlo</string>
     <string name="ovk_volume">Volumen</string>
     <string name="ovk_navigate">Navegar</string>
+    <string name="ovk_btn_rocker_works">Rueda ▲▼: detectada en esta moto</string>
+    <string name="ovk_btn_rocker_absent">Rueda ▲▼: sin detectar — pon Navegar para usarla igual</string>
+    <string name="ovk_btn_rocker_untested">Rueda ▲▼: aún sin usarla en esta moto</string>
     <string name="ovk_voice">Voz</string>
     <string name="ovk_home">Inicio</string>
     <string name="ovk_back">Atrás</string>

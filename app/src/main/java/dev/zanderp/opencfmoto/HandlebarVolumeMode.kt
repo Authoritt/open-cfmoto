@@ -27,6 +27,18 @@ object HandlebarVolumeMode {
     fun isNavigate(context: Context): Boolean =
         BikeScope.getBoolean(prefs(context), context, KEY, true)
 
+    /**
+     * True when the rider actually picked a side in Controls, as opposed to riding the default.
+     *
+     * It decides whose word wins. The app also GUESSES whether a bike has a ▲/▼ rocker at all
+     * ([ButtonPresencePrefs]) and that guess silently overrode this setting: the toggle said "Navigate",
+     * the guess said "this pod has no rocker", nothing was pinned, and the arrows fell through to phone
+     * volume — the rider's configuration doing nothing, with no way to tell why. A guess never overrules
+     * an explicit choice.
+     */
+    fun isExplicit(context: Context): Boolean =
+        BikeScope.hasBoolean(prefs(context), context, KEY)
+
     fun set(context: Context, navigate: Boolean) {
         BikeScope.putBoolean(prefs(context), context, KEY, navigate)
         // Apply live if the bridge is running.
