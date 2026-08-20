@@ -133,9 +133,11 @@ flag, so the choice survives each GPS fix.
 - **A volume change cannot tell you who made it.** The bike's rocker and the rider's own volume keys are
   the same write. With no bike connected over Bluetooth, his phone's volume buttons were scrolling the
   map on the dash. Gated on a real link now (`MediaButtonBridge.bikeCanReachUs`).
-- **An unescaped `'` in `strings.xml` fails only the RELEASE build**, with the misleading message
-  *"Invalid unicode escape sequence"*. Unit tests never merge resources, so a commit can be green and
-  still be unpackageable. Run `assembleRelease` before believing a build is deliverable.
+- **Do not put an apostrophe in `strings.xml` at all — not even escaped.** It fails only the RELEASE
+  build, with the misleading *"Invalid unicode escape sequence"*, and unit tests never merge resources,
+  so the commit is green and unpackageable. Escaping it as `'` was tried twice from this toolchain and
+  the backslash did not survive to the file either time; rewording around the apostrophe is what works.
+  Run `assembleRelease` before believing a build is deliverable.
 - **`YunmoFrameTest.parseOkDimension_xCape1200Payload` is red, and was red before this work** (expects
   2048, gets 1024). The build flag says `1024x464`, so somebody was deliberately experimenting on the
   Zontes and left the test behind. Only the Zontes rider can settle which side is right — do not "fix"
