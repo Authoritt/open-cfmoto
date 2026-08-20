@@ -92,7 +92,13 @@ class PhoneHotspotTransport(
     @Volatile private var blePush: BleApInfoPush? = null
     @Volatile private var logCb: (String) -> Unit = {}
 
-    private data class OwnerGroup(val ssid: String, val passphrase: String, val goAddress: Inet4Address)
+    private data class OwnerGroup(
+        val ssid: String,
+        val passphrase: String,
+        val goAddress: Inet4Address,
+        /** The channel the group ACTUALLY formed on, or 0. Asking for a band is not the same as getting it. */
+        val frequency: Int = 0,
+    )
 
     override suspend fun open(ctx: Context, spec: ConnectionSpec, io: PlatformIO): BikeEndpoint {
         val appCtx = ctx.applicationContext
@@ -147,31 +153,60 @@ class PhoneHotspotTransport(
                 (if (status != null) " and answered status=$status" else " (it did not answer, going ahead)") +
                 " — creating the Wi-Fi Direct group now",
         )
-        val group = createOwnerGroup(appCtx, log)
-        log("group formed: ssid='${group.ssid}' pwdLen=${group.passphrase.length} go=${group.goAddress.hostAddress}")
-
-        // 3) BLE phase 2: hand over the creds (0x52) on the link phase 1 left open, and await 0x51/0x53.
-        val handedOver = runCatching {
-            pusher.sendApInfo(
-                ssid = group.ssid,
-                pwd = group.passphrase,
-                ip = group.goAddress.hostAddress ?: DEFAULT_GO_IP,
+        // Two bands, one connect. Carbit asks for 5 GHz and so do we — but on 2026-08-20 the Rieju dash
+        // answered EVERY poll with status=2 ("still waiting for your network") for 30 s while a 5 GHz group
+        // sat there unused, which is exactly what a 2.4 GHz-only radio looks like from this side. Rather than
+        // ship a guess and cost another rider another day, the same connector now offers the only other legal
+        // band before giving up. This is NOT a fallback to another connector: the mechanism, the dash and the
+        // credentials are identical — only the channel changes.
+        val bands = listOf(CarbitGroupConfig.BAND, WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
+        var group: OwnerGroup? = null
+        var handedOver = false
+        for ((i, band) in bands.withIndex()) {
+            if (i > 0) {
+                log("the dash kept answering 'not joined yet' — dropping the group and offering the same network on the other band")
+                releaseGroup(log)
+            }
+            val g = createOwnerGroup(appCtx, log, band)
+            group = g
+            log(
+                "group formed: ssid='${g.ssid}' pwdLen=${g.passphrase.length} go=${g.goAddress.hostAddress}" +
+                    if (g.frequency > 0) {
+                        " freq=${g.frequency} MHz (${if (g.frequency > 3000) "5 GHz" else "2.4 GHz"} — what it ACTUALLY formed on)"
+                    } else {
+                        ""
+                    },
             )
-        }.getOrElse { e ->
-            if (e is CancellationException) throw e
-            log("BLE credential push threw: ${e.message}")
-            false
+
+            // 3) BLE phase 2: hand over the creds (0x52) on the link phase 1 left open, then keep asking the
+            //    dash whether it joined — it answers when asked, it never volunteers.
+            handedOver = runCatching {
+                pusher.sendApInfo(
+                    ssid = g.ssid,
+                    pwd = g.passphrase,
+                    ip = g.goAddress.hostAddress ?: DEFAULT_GO_IP,
+                )
+            }.getOrElse { e ->
+                if (e is CancellationException) throw e
+                log("BLE credential push threw: ${e.message}")
+                false
+            }
+            if (handedOver) break
+            // Only "asked and still waiting" earns another band. Anything else — no reply, a GATT drop, an
+            // auth refusal — means a second attempt is noise at a dash that is not listening.
+            if (pusher.lastNetBuildStatus != "2") break
         }
+        val group0 = group ?: throw IllegalStateException("no Wi-Fi Direct group was created")
         if (!handedOver) {
             // Unlike a phase-1 failure, here the group IS up — so the manual dialog is offering a network
             // that actually exists and the rider can still finish the job by hand.
             log("the dash did not acknowledge the creds — the group is up, so the rider can still join it by hand")
-            showReadableCreds(activity, group, log)
+            showReadableCreds(activity, group0, log)
         }
 
         // 4) Endpoint: phone is GO + PXC server at its GO address. No bindable Network (P2P), so the link
         //    layer binds to our GO address and runs the prober in server mode (phoneIsServer = true).
-        return endpointOf(group)
+        return endpointOf(group0)
     }
 
     /**
@@ -232,7 +267,11 @@ class PhoneHotspotTransport(
      * because OEM stacks report the same stale-group condition either way. `P2P_UNSUPPORTED` is not
      * repairable and stops immediately with its own rider-facing message.
      */
-    private suspend fun createOwnerGroup(appCtx: Context, log: (String) -> Unit): OwnerGroup =
+    private suspend fun createOwnerGroup(
+        appCtx: Context,
+        log: (String) -> Unit,
+        band: Int = CarbitGroupConfig.BAND,
+    ): OwnerGroup =
         suspendCancellableCoroutine { cont ->
             val mgr = appCtx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
             if (mgr == null) {
@@ -283,7 +322,8 @@ class PhoneHotspotTransport(
                         val go = (info.groupOwnerAddress as? Inet4Address)
                             ?: runCatching { InetAddress.getByName(DEFAULT_GO_IP) as Inet4Address }.getOrNull()
                         if (!ssid.isNullOrBlank() && pwd != null && go != null) {
-                            succeed(OwnerGroup(ssid, pwd, go))
+                            val freq = runCatching { grp.frequency }.getOrDefault(0)
+                            succeed(OwnerGroup(ssid, pwd, go, freq))
                         }
                     }
                 }
@@ -368,7 +408,7 @@ class PhoneHotspotTransport(
             }
 
             // The official app's own config, if this Android lets a normal app ask for one (null = it doesn't).
-            val custom = customConfig(appCtx, log)
+            val custom = customConfig(appCtx, log, band)
 
             fun attemptCreate(config: WifiP2pConfig?) {
                 val how = if (config != null && custom != null) {
@@ -433,17 +473,49 @@ class PhoneHotspotTransport(
      * supports the band — the official app gates on the same fact — so we never ask for a radio this device
      * does not have.
      */
-    private fun customConfig(appCtx: Context, log: (String) -> Unit): CarbitGroupConfig.Built? {
+    /** How a requested band reads in the log, so "what we asked for" is never confused with what we got. */
+    private fun bandName(band: Int, fiveGhzSupported: Boolean): String = when (band) {
+        WifiP2pConfig.GROUP_OWNER_BAND_5GHZ -> "5 GHz (as Carbit asks)"
+        WifiP2pConfig.GROUP_OWNER_BAND_2GHZ -> "2.4 GHz (the band a dash is most likely to see)"
+        else -> if (fiveGhzSupported) "AUTO" else "AUTO (this phone reports no 5 GHz)"
+    }
+
+    /** Drop the current group so the next attempt can offer the same network on another channel. */
+    private suspend fun releaseGroup(log: (String) -> Unit) {
+        val mgr = manager
+        val chan = channel
+        if (mgr == null || chan == null) return
+        runCatching {
+            mgr.removeGroup(chan, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() { log("group removed — rebuilding on the other band") }
+                override fun onFailure(reason: Int) {
+                    log("removeGroup rejected (${WifiDirectPreflight.reasonName(reason)}) — rebuilding anyway")
+                }
+            })
+        }
+        kotlinx.coroutines.delay(REPAIR_SETTLE_MS)
+    }
+
+    private fun customConfig(
+        appCtx: Context,
+        log: (String) -> Unit,
+        wanted: Int = CarbitGroupConfig.BAND,
+    ): CarbitGroupConfig.Built? {
         val creds = CarbitGroupConfig.creds()
         val fiveGhz = runCatching {
             (appCtx.getSystemService(Context.WIFI_SERVICE) as? WifiManager)?.is5GHzBandSupported
         }.getOrNull() ?: false
-        val band = if (fiveGhz) CarbitGroupConfig.BAND else WifiP2pConfig.GROUP_OWNER_BAND_AUTO
+        val wants5 = wanted == CarbitGroupConfig.BAND
+        val band = when {
+            !wants5 -> wanted
+            fiveGhz -> CarbitGroupConfig.BAND
+            else -> WifiP2pConfig.GROUP_OWNER_BAND_AUTO
+        }
         val built = CarbitGroupConfig.build(creds, band, log)
         if (built != null) {
             log(
                 "custom group config: name='${built.networkName}' pwdLen=${creds.passphrase.length} " +
-                    "band=${if (fiveGhz) "5 GHz (as Carbit asks)" else "AUTO (this phone reports no 5 GHz)"} " +
+                    "band=${bandName(band, fiveGhz)} " +
                     "via ${built.how}",
             )
         }

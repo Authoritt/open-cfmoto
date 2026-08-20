@@ -682,8 +682,15 @@ class BleApInfoPush(
         /** Phase 1 budget: the 6 s scan, the connect, discovery, MTU, CCCD and two writes (the old total). */
         private const val CONNECT_TIMEOUT_MS = 25_000L
 
-        /** Phase 2 budget: the creds write plus association + DHCP on the dash, polled throughout. */
-        private const val AP_INFO_TIMEOUT_MS = 30_000L
+        /**
+         * Phase 2 budget per band: the creds write plus association + DHCP on the dash, polled throughout.
+         *
+         * Halved from 30 s when the transport started offering both bands in one connect — two full 30 s
+         * waits is a minute of a rider standing next to a bike, and the field log shows there is nothing to
+         * wait for: the dash answers each poll in ~200 ms, so a join that is going to happen happens inside
+         * a handful of polls.
+         */
+        private const val AP_INFO_TIMEOUT_MS = 15_000L
 
         /** Carbit's own re-ask cadence in `processRequestBuildNet` (`Thread.sleep(2000)`). */
         private const val NET_POLL_INTERVAL_MS = 2_000L
