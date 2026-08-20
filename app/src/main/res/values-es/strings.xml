@@ -1097,6 +1097,7 @@
     <string name="ovk_provider_aa_hint">Google/Waze: el tablero lo pinta Android Auto — conecta primero y luego pon el destino.</string>
     <string name="ovk_dash_connect_first">Conecta la moto primero</string>
     <string name="ovk_btn_needs_bt_on">Enciende el Bluetooth para manejar el tablero con el manillar — si no, ▲/▼ sólo cambian el volumen del teléfono.</string>
+    <string name="ovk_btn_bike_not_connected">El Bluetooth está encendido, pero la moto no está conectada a él — el manillar no tiene por dónde llegar al teléfono. Conéctala desde el menú Bluetooth de la moto (o toca la moto en los ajustes de Bluetooth de Android).</string>
     <string name="ovk_btn_needs_bt_permission">Concede el permiso de Bluetooth para manejar el tablero con el manillar — si no, ▲/▼ sólo cambian el volumen del teléfono.</string>
     <string name="ovk_radio_wifi_title">Enciende el Wi-Fi</string>
     <string name="ovk_radio_wifi_body">Tu moto se conecta por Wi-Fi y el del teléfono está apagado. Android no deja que la app lo encienda, pero te abro el panel para que lo hagas de un toque.</string>

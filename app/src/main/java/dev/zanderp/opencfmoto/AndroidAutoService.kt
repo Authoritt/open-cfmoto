@@ -565,6 +565,14 @@ class AndroidAutoService : Service() {
         }
         mediaButtons = MediaButtonBridge(applicationContext, LogBus::log).also { it.start() }
         LogBus.log("[BTN] handlebar bridge started (▲/▼ drive the dash, not phone volume)")
+        // Bluetooth ON is not the same as the BIKE being connected to it, and the difference is invisible
+        // from the saddle: on 2026-08-20 the rider turned Bluetooth on, closed and reopened the app
+        // several times, and the handlebar stayed dead — because the dash never connected
+        // (`connectedMac=null` all session). Say so, instead of letting him hunt for it.
+        if (!BluetoothHelper.status(applicationContext).connected) {
+            LogBus.log("[BTN] Bluetooth is on but NO device is connected — the handlebar has no path to the phone yet")
+            notifyHandlebarUnavailable(R.string.ovk_btn_bike_not_connected)
+        }
     }
 
     /** Tell the RIDER, once per service life — a silent log is why this went unnoticed on the bike. */

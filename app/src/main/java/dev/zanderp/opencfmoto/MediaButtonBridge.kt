@@ -94,6 +94,28 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
 
     /** True while the audio-focus request is ours. Re-taking it churns the rider's music for nothing. */
     @Volatile private var holdsFocus = false
+
+    /**
+     * Set once a media key arrives. Only an external device can send one, so it is PROOF the handlebar
+     * has a path to us — trusted over any profile check, which can be wrong. Learned the hard way: an
+     * inference that overrules evidence is how the rocker got written off in the first place.
+     */
+    @Volatile private var sawExternalKey = false
+
+    /** Last known "the bike can reach us over Bluetooth", so a change can be logged and acted on once. */
+    @Volatile private var btLinkUp: Boolean? = null
+
+    /**
+     * Can the handlebar actually reach this phone right now?
+     *
+     * It matters because the bike's ▲/▼ arrive as a plain volume write, which is indistinguishable from
+     * the rider pressing the phone's OWN volume keys. On 2026-08-20 the bike never connected over
+     * Bluetooth (`connectedMac=null` for the whole session) and the consequence was absurd: the handlebar
+     * did nothing, while the phone's volume buttons scrolled the map on the dash. With no device
+     * connected, a volume change is the rider's and nothing else.
+     */
+    private fun bikeCanReachUs(): Boolean =
+        sawExternalKey || runCatching { BluetoothHelper.status(context).connected }.getOrDefault(false)
     /** Last time a bike media key was handled — skip focus re-request while the rider is tapping. */
     private var lastKeyAt = 0L
     private val keepAliveRunnable = object : Runnable {
@@ -103,6 +125,15 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             // Session refresh only while keys are flying — re-requesting focus mid-tap makes the
             // BT stack re-deliver the same press (looks like "need 3 taps for one step").
             refreshPlayingAppearance(reason = "keep-alive")
+            // The bike's Bluetooth can connect long after we started (rider turns BT on, the dash takes
+            // its time). Notice the moment it does and start holding the volume then, instead of leaving
+            // the handlebar dead for the whole ride.
+            val up = bikeCanReachUs()
+            if (btLinkUp != up) {
+                btLinkUp = up
+                log("[BTN] bike over Bluetooth: ${if (up) "CONNECTED — the handlebar can reach us; holding the volume to read it" else "not connected — the handlebar has no path here"}")
+                if (up) maybePinVolume("bike connected") else unpinVolume()
+            }
             val idle = SystemClock.elapsedRealtime() - lastKeyAt > KEY_IDLE_BEFORE_FOCUS_MS
             if (idle && keepAliveTicks % 3 == 0) requestButtonFocus(reason = "keep-alive")
             handler.postDelayed(this, KEEP_ALIVE_MS)
@@ -505,6 +536,13 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             }
             return
         }
+        if (!bikeCanReachUs()) {
+            // Holding the volume for a handlebar that has no path here only takes the rider's volume
+            // away for nothing.
+            if (pinnedVolume >= 0) unpinVolume()
+            log("[BTN] skip pin ($reason) — the bike is not connected over Bluetooth; your volume stays yours")
+            return
+        }
         pinVolume()
     }
 
@@ -638,6 +676,11 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
                 // is streaming, an unexplained volume move is proof the rocker exists: adopt it, and treat
                 // this very press as the gesture. Never in Volume mode — there the rocker is the rider's
                 // volume control and must stay theirs.
+                if (!bikeCanReachUs()) {
+                    // Nothing is connected, so nobody but the rider moved this. Leave it alone.
+                    lastVolume = now
+                    return
+                }
                 val relearn = pinnedVolume < 0
                 if (relearn && BikeLink.prober?.isStreaming != true) {
                     lastVolume = now
@@ -908,6 +951,7 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
      */
     private fun onKeyDown(keyCode: Int, repeatCount: Int = 0) {
         val held = heldFor(keyCode) ?: return
+        sawExternalKey = true
         ButtonPresencePrefs.markTrackSeen(context)
         lastKeyAt = SystemClock.elapsedRealtime()
         if (repeatCount > 0) {
