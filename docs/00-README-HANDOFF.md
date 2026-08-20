@@ -9,6 +9,7 @@ writing code.**
 | `00-README-HANDOFF.md` | This file — orientation, goal, how to work, how to test. |
 | `01-REVERSE-ENGINEERING.md` | Everything reverse-engineered about the CFMoto bike: QR, Wi-Fi, the PXC/EasyConn protocol (control + media planes), BLE, exact byte formats, cmd IDs, verified values. |
 | `02-CURRENT-APP.md` | The current OpenCfMoto app: every source file, what works today, how to build/run/debug. |
+| `08-FIELD-STATE.md` | **Read this first if you are resuming.** Where the work actually is right now: what a real bike has proven, what is waiting on a rider's log, and the facts already paid for in the field. |
 | `03-PLAN-ANDROID-AUTO.md` | The task you are to implement: embed a full Android Auto head-unit receiver so Google Maps/Waze (via Android Auto) render on the bike. Milestones, HUR internals, risks, decisions. |
 
 ## The one-paragraph story so far
