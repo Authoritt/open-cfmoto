@@ -91,6 +91,9 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
         if (capturingForDash()) reclaimCapture("focus-loss")
     }
     private var keepAliveTicks = 0
+
+    /** True while the audio-focus request is ours. Re-taking it churns the rider's music for nothing. */
+    @Volatile private var holdsFocus = false
     /** Last time a bike media key was handled — skip focus re-request while the rider is tapping. */
     private var lastKeyAt = 0L
     private val keepAliveRunnable = object : Runnable {
@@ -253,6 +256,15 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
      * Duckable nav focus — music keeps playing (possibly ducked). Never exclusive GAIN.
      */
     private fun requestButtonFocus(reason: String) {
+        // Already ours? Then leave it alone. This used to abandon and re-request unconditionally, and the
+        // keep-alive runs it every 12s — so the rider's music un-ducked and re-ducked on a 12-second
+        // cycle for the whole ride. Nothing needed re-taking; holding focus is not something that decays.
+        // (Owner, 2026-08-20: "the handlebar drives the map now, but it also controls the audio.")
+        if (holdsFocus) {
+            if (reason == "keep-alive") return
+            log("[BTN] already hold audio focus — not re-taking it ($reason)")
+            return
+        }
         try {
             try { focusRequest?.let { audio.abandonAudioFocusRequest(it) } } catch (_: Exception) {}
             val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -263,7 +275,8 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
                 .build()
             focusRequest = req
             val granted = audio.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-            log("[BTN] audio focus ${if (granted) "granted (nav duck — music can play)" else "DENIED"} ($reason)")
+            holdsFocus = granted
+            log("[BTN] audio focus ${if (granted) "granted — held from here on, music ducks ONCE (not every 12s)" else "DENIED"} ($reason)")
         } catch (e: Exception) {
             log("[BTN] audio focus failed: $e")
         }
@@ -289,8 +302,10 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
                 refreshPlayingAppearance(reason = "ducked")
             AudioManager.AUDIOFOCUS_LOSS,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ->
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                holdsFocus = false
                 scheduleReclaim(name)
+            }
         }
     }
 
@@ -424,6 +439,7 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
         stopSilence()
         try { focusRequest?.let { audio.abandonAudioFocusRequest(it) } } catch (_: Exception) {}
         focusRequest = null
+        holdsFocus = false
     }
 
     /** A looping silent track: makes us a genuinely "playing" media app so we win button routing. */
