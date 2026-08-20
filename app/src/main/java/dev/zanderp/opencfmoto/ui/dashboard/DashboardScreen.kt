@@ -61,6 +61,7 @@ import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.components.PrimaryButton
 import dev.zanderp.opencfmoto.ui.components.StatusKind
 import dev.zanderp.opencfmoto.ui.components.Tile
+import dev.zanderp.opencfmoto.ui.connection.ensureConnectorReady
 import dev.zanderp.opencfmoto.ui.connection.findActivity
 import dev.zanderp.opencfmoto.ui.connection.rememberConnectionStatus
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
@@ -117,6 +118,14 @@ fun DashboardScreen(nav: NavController) {
         // factory too; only mirror/espejo and the Android-Auto path stay classic.
         GpxSession.prepareFreeRide()
         val activity = ctx.findActivity() ?: return
+        // Ask for whatever this bike's connector needs BEFORE connecting. Asking only at pairing was a
+        // real, reported failure: the Rieju owner's bike is already paired, so he connects from HERE and
+        // the pairing screen never runs — his log showed the BLE scan dying on
+        // "SecurityException: Need BLUETOOTH_SCAN" with no permission prompt anywhere in sight. A connect
+        // entry point that can't ask is a connect entry point that fails silently, so every one of them
+        // asks now. Returns false when it had to prompt: the grant lands asynchronously and the rider taps
+        // Conectar again, which is the same pattern the location gate already uses.
+        if (!ensureConnectorReady(activity, BikeMemory.lastQr(ctx))) return
         CfmotoConnect.startCfmotoMap(activity, preferFactory = true)
     }
     fun afterMode(mode: String) {
