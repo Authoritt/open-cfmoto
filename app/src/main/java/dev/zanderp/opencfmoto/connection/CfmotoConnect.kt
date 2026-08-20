@@ -410,6 +410,19 @@ object CfmotoConnect {
             ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
             return
         }
+        // A bike whose QR carries the BLE mechanism has a connector that does the whole thing by itself —
+        // but only off the Android-Auto path, because the factory has no AA hand-off. Falling through here
+        // silently is what the Rieju rider hit on 2026-08-20 18:51: he tapped connect, the BLE bridge was
+        // skipped without a word, and he was handed a dialog telling him to do the OPPOSITE — copy the
+        // dash's credentials into his own hotspot. Say it before showing it.
+        if (isBleHotspot(qr)) {
+            LogBus.log(
+                "→ this bike HAS the Bluetooth bridge, but Android Auto does not use it (no AA hand-off in the " +
+                    "factory) — falling back to the manual hotspot method. Connect with the map or the mirror " +
+                    "to get the automatic bridge.",
+            )
+            Toast.makeText(activity, R.string.main_phone_hotspot_aa_no_bridge, Toast.LENGTH_LONG).show()
+        }
         LogBus.log(
             "→ phone-hotspot mode (action=${qr.action} mac=${qr.mac}) — " +
                 "assist dialog (app cannot create AP; set dash SSID/pwd in system hotspot)",

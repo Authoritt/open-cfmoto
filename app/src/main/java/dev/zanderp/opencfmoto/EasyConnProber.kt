@@ -211,6 +211,18 @@ class EasyConnProber(
         // and the bike connects back to IT, not us). Probing anyway is pointless: no media server means
         // no frames and a blank dash. Fail fast with an actionable message instead of failing silently.
         if (bindConflict) {
+            // …unless they are OURS. Two connects in a row leave the previous prober's servers closing, and
+            // blaming the official app there sends the rider to force-stop something that is not running —
+            // seen on 2026-08-20 18:51:19, all three ports EADDRINUSE 33 s after our own previous attempt.
+            if (BikeLink.prober !== this) {
+                log(
+                    "!! link ports are still held by our OWN previous connect (it is shutting down). " +
+                        "Wait a few seconds and press Connect again — nothing else needs closing.",
+                )
+                ConnectionState.set(Phase.ERROR, "espera unos segundos y vuelve a conectar")
+                stop()
+                return
+            }
             log("!! link ports are held by another app (usually the official CFMoto/EasyConnect app). " +
                 "Close it (force-stop) and reconnect — OpenCfMoto needs ports ${LISTEN_PORTS.toList()}.")
             ConnectionState.set(Phase.ERROR, "close the official CFMoto app, then reconnect")
