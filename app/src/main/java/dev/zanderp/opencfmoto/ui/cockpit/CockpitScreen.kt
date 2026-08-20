@@ -215,6 +215,11 @@ fun CockpitScreen(nav: NavController) {
     var navigating by remember { mutableStateOf(false) }
     var navProgress by remember { mutableStateOf<GpxNav.Progress?>(null) }
 
+    // Heading-up vs north-up for the chase camera. The dash map has had this (and a route overview)
+    // since day one; the phone map only ever had "centre on me", which is why the owner kept reporting
+    // that the driving view he sees in Google Maps was missing here. Same three controls, both screens.
+    var headingUpMode by remember { mutableStateOf(true) }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(kind, needsMapsforgeMap) {
         // Host the SELECTED renderer (skip when the Mapsforge gate shows the download card instead).
@@ -241,7 +246,7 @@ fun CockpitScreen(nav: NavController) {
                 // Continuous chase ONLY while navigating (heading-up nav camera). In free ride the rider
                 // keeps full control of pan/zoom; "locate me" does a one-shot recenter instead of leashing.
                 if (navigating && following) {
-                    renderer.follow(loc.latitude, loc.longitude, brng, 17.5, headingUp = true, moving = moving)
+                    renderer.follow(loc.latitude, loc.longitude, brng, 17.5, headingUp = headingUpMode, moving = moving)
                 }
             }
             @Deprecated("Deprecated in Java")
@@ -424,7 +429,7 @@ fun CockpitScreen(nav: NavController) {
             val moving = loc != null && loc.hasSpeed() && loc.speed > 1.2f
             val brng = if (loc != null && loc.hasBearing() && moving) loc.bearing else 0f
             renderer.setMe(ll.first, ll.second, brng)
-            renderer.follow(ll.first, ll.second, brng, 17.5, headingUp = true, moving = moving)
+            renderer.follow(ll.first, ll.second, brng, 17.5, headingUp = headingUpMode, moving = moving)
         } else {
             LogBus.log("[cockpit-nav] iniciar sin fix aún — el mapa seguirá al primer GPS")
         }
@@ -473,7 +478,7 @@ fun CockpitScreen(nav: NavController) {
             val brng = if (loc != null && loc.hasBearing() && moving) loc.bearing else 0f
             renderer.setMe(ll.first, ll.second, brng)
             // Recenter now: heading-up while navigating (the running nav camera), north-up otherwise.
-            renderer.follow(ll.first, ll.second, brng, if (navigating) 17.5 else 17.0, headingUp = navigating, moving = moving)
+            renderer.follow(ll.first, ll.second, brng, if (navigating) 17.5 else 17.0, headingUp = headingUpMode && navigating, moving = moving)
         } else {
             LogBus.log("[cockpit-locate] sin fix aún — el mapa seguirá al primer GPS")
             runCatching { Toast.makeText(ctx, ctx.getString(R.string.ovk_finding_location), Toast.LENGTH_SHORT).show() }
@@ -566,8 +571,7 @@ fun CockpitScreen(nav: NavController) {
         // music panel, the ~190dp call card, or the shorter nav progress card) so it's never buried; in
         // clean Mapa mode it drops to the corner. While navigating it doubles as the re-center control
         // (osmdroid drops follow on a manual pan). Drawn before the search overlay so search covers it.
-        LocateButton(
-            following = following,
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(
@@ -579,8 +583,37 @@ fun CockpitScreen(nav: NavController) {
                         else -> 20.dp
                     },
                 ),
-            onClick = { locateMe() },
-        )
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Whole-route overview, only when there is a route to show. Always north-up, like the dash:
+            // an overview that rotates with the rider is unreadable.
+            navRoute?.let { r ->
+                MapControlButton(glyph = "⤢", active = false) {
+                    following = false
+                    headingUpMode = false
+                    renderer.resetNorth()
+                    renderer.zoomToRoute(r.points.map { it.lat to it.lon })
+                }
+            }
+            // Driving view vs north-up. Lit while the map turns with the rider, which IS the "focus on
+            // driving" the owner was missing: the route ahead stays pointing up the screen.
+            MapControlButton(glyph = if (headingUpMode) "➤" else "N", active = headingUpMode) {
+                headingUpMode = !headingUpMode
+                if (!headingUpMode) renderer.resetNorth()
+                lastFix?.let { loc ->
+                    val moving = loc.hasSpeed() && loc.speed > 1.2f
+                    renderer.follow(
+                        loc.latitude, loc.longitude,
+                        if (loc.hasBearing() && moving) loc.bearing else 0f,
+                        if (navigating) 17.5 else 17.0,
+                        headingUp = headingUpMode,
+                        moving = moving,
+                    )
+                }
+            }
+            LocateButton(following = following, modifier = Modifier, onClick = { locateMe() })
+        }
 
         // The ONE destination box, for every provider — native autocomplete drawn over the map, no
         // GpxActivity handoff and no second dialog. A pick on Propio/Espejo becomes a destination on
@@ -714,6 +747,24 @@ private fun GlyphBox(glyph: String, onClick: () -> Unit) {
         Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(c.ground.copy(alpha = 0.92f)).border(1.dp, c.line, RoundedCornerShape(10.dp)).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(glyph, color = c.ink, fontSize = 20.sp) }
+}
+
+/**
+ * Round map control that sits above the locate FAB — same frame, lit with the ignition accent while its
+ * mode is on, so "the map is turning with me" is visible at a glance instead of guessed.
+ */
+@Composable
+private fun MapControlButton(glyph: String, active: Boolean, onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(if (active) c.ignition else c.ground.copy(alpha = 0.92f))
+            .border(1.dp, c.line, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Text(glyph, color = if (active) c.onIgnition else c.ink, fontSize = 19.sp) }
 }
 
 /**
