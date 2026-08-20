@@ -95,6 +95,9 @@ class BleApInfoPush(
     /** Bounded wait for the dash's `0x50` reply; removed the moment it lands (or fires once and gives up). */
     @Volatile private var netReplyTimeout: Runnable? = null
 
+    /** Stable per-session phone id, the shape the Wi-Fi handshake already uses. */
+    private val phoneId: String = java.util.UUID.randomUUID().toString()
+
     /** The repeating `0x50` poll that runs while we wait for the dash to finish joining. */
     @Volatile private var netPoll: Runnable? = null
 
@@ -153,11 +156,13 @@ class BleApInfoPush(
         beginPhase(PHASE_HANDSHAKE, timeoutMs) { ok -> if (cont.isActive) cont.resumeWith(Result.success(ok)) }
         pendingService = service
 
-        frameClientInfo = EcBtpProtocol.build(EcBtpProtocol.CMD_EC_BTP_CLIENT_INFO.toByte(), ByteArray(0))
+        frameClientInfo = EcBtpProtocol.build(EcBtpProtocol.CMD_EC_BTP_CLIENT_INFO.toByte(), clientInfoPayload())
         frameRequestBuild = EcBtpProtocol.build(EcBtpProtocol.CMD_REQUEST_BUILD_NET.toByte(), ByteArray(0))
         log("[BLE-AP] connectAndRequestNet mac=$mac service=$service (phase 1/2: ask the dash BEFORE the network exists)")
-        // CLIENT_INFO/REQUEST_BUILD have empty payloads (no secrets) — log verbatim. The 0x52 AP_INFO
-        // payload embeds ssid+pwd in cleartext, so phase 2 logs only its cmd/len.
+        // REQUEST_BUILD is empty (the official app's is too). CLIENT_INFO no longer is — see
+        // [clientInfoPayload]; it carries no secrets, so both are logged verbatim. The 0x52 AP_INFO payload
+        // embeds ssid+pwd in cleartext, so phase 2 logs only its cmd/len.
+        log("[BLE-AP] CLIENT_INFO payload: ${String(clientInfoPayload(), Charsets.UTF_8)}")
         log("[BLE-AP] frames: CLIENT_INFO=${hex(frameClientInfo)} REQUEST_BUILD=${hex(frameRequestBuild)}")
 
         val adapter = btManager?.adapter
@@ -680,6 +685,54 @@ class BleApInfoPush(
         }
     }
 
+    /**
+     * Introduce the phone properly, the way the official app does.
+     *
+     * Ours went out EMPTY — five bytes, `24 30 04 10 0a` — for five field sessions. Carbit's carries a
+     * JSON body (`rm.b.preRequest()`): who the phone is, and **every IPv4 address it holds**:
+     *
+     *     {"phoneType":0,"phoneID":…,"phoneName":…,"packageName":…,
+     *      "netInterface":[{"name":"wlan0","addr":"…","mask":"255.255.255.0"}, …]}
+     *
+     * A dash that is about to be told "join my network and dial me" has every reason to want that, and a
+     * dash that never got it has every reason to answer politely and do nothing — which is exactly what
+     * this one has done. Same interface filter as the official app: no loopback, no non-IPv4, and none of
+     * the virtual/carrier names it skips by prefix.
+     *
+     * `packageName` is the CFMoto app's, matching what the Wi-Fi handshake has always sent
+     * ([EasyConnProber.SPOOFED_PACKAGE]) — a compatibility string, like a user agent.
+     */
+    private fun clientInfoPayload(): ByteArray = runCatching {
+        val json = org.json.JSONObject()
+        json.put("phoneType", 0)
+        json.put("phoneID", phoneId)
+        json.put("phoneName", "${android.os.Build.BRAND} ${android.os.Build.MODEL}".trim())
+        json.put("packageName", dev.zanderp.opencfmoto.EasyConnProber.SPOOFED_PACKAGE)
+        val ifs = org.json.JSONArray()
+        java.net.NetworkInterface.getNetworkInterfaces().toList().forEach { nif ->
+            val name = nif.displayName.orEmpty()
+            if (SKIPPED_IFACES.any { name.startsWith(it, ignoreCase = true) }) return@forEach
+            nif.interfaceAddresses.forEach { ia ->
+                val addr = ia.address
+                if (addr is java.net.Inet4Address && !addr.isLoopbackAddress && !addr.isAnyLocalAddress) {
+                    val maskBits = (-1) shl (32 - ia.networkPrefixLength)
+                    val mask = listOf(24, 16, 8, 0).joinToString(".") { ((maskBits shr it) and 0xFF).toString() }
+                    ifs.put(
+                        org.json.JSONObject()
+                            .put("name", name)
+                            .put("addr", addr.hostAddress)
+                            .put("mask", mask),
+                    )
+                }
+            }
+        }
+        json.put("netInterface", ifs)
+        json.toString().toByteArray(Charsets.UTF_8)
+    }.getOrElse {
+        log("[BLE-AP] could not build the CLIENT_INFO body ($it) — sending it empty, as before")
+        ByteArray(0)
+    }
+
     /** Control characters escaped so one dash reply stays one log line. */
     private fun text(b: ByteArray): String = b.toString(Charsets.UTF_8)
         .replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
@@ -691,6 +744,11 @@ class BleApInfoPush(
         /** Carbit-generic B36x service (design Appendix A). Overridable per-bike via `spec.bleServiceOverride`. */
         val DEFAULT_SERVICE_UUID: UUID = UUID.fromString("0000B360-D6D8-C7EC-BDF0-EAB1BFC6BCBC")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
+
+        /** Virtual / carrier interfaces the official app leaves out of CLIENT_INFO. */
+        private val SKIPPED_IFACES = listOf(
+            "oem", "nm_", "tun", "qcom_", "dummy", "lo", "ifb", "sit", "usb", "tunl", "bond", "ccmni", "rmnet",
+        )
 
         private const val PHASE_HANDSHAKE = "connect + 0x30/0x50"
         private const val PHASE_AP_INFO = "0x52 + the dash's 0x51/0x53"
