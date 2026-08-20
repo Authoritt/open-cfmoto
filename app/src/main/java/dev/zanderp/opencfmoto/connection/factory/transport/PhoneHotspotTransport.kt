@@ -162,10 +162,11 @@ class PhoneHotspotTransport(
         // ship a guess and cost another rider another day, the same connector now offers the only other legal
         // band before giving up. This is NOT a fallback to another connector: the mechanism, the dash and the
         // credentials are identical — only the channel changes.
-        // 2.4 GHz first. Carbit asks for 5 GHz only because it has nothing better to go on; we DO have
-        // something better — the dash module in the Rieju is a Feasycom FSC-BW121 (owner, 2026-08-20), a
-        // 2.4 GHz combo part, and the field logs show 5 GHz ignored every time. Offering the band the radio
-        // cannot even see first is 15 s of a rider's patience spent on nothing.
+        // 2.4 GHz first — for a weaker reason than the one first written here. The dash module is a
+        // Feasycom FSC-BW121 (owner, 2026-08-20), and it is NOT a 2.4-only part: it is dual-band
+        // a/b/g/n/ac, so 5 GHz was never invisible to it. What the field logs show is only that 5 GHz was
+        // ignored in every attempt, same as 2.4. So this order buys nothing but a shorter wait on the band
+        // that more dashes tend to accept, and it must not be read as "the radio cannot see 5 GHz".
         val bands = listOf(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ, CarbitGroupConfig.BAND)
         var group: OwnerGroup? = null
         var handedOver = false
