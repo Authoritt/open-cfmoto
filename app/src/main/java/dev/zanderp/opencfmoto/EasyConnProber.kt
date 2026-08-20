@@ -192,6 +192,7 @@ class EasyConnProber(
         //    minutes, and without reuse the rebind fails with EADDRINUSE — so no media servers open,
         //    the bike has nowhere to connect back to, and the dash shows an empty screen (no frames).
         var bindConflict = false
+        var addressGone = false
         for (port in LISTEN_PORTS) {
             try {
                 val ss = ServerSocket()
@@ -201,6 +202,8 @@ class EasyConnProber(
                 spawnAccept(port, ss)
             } catch (e: Exception) {
                 bindConflict = true
+                // EADDRNOTAVAIL is a different animal from EADDRINUSE: the address is GONE, not taken.
+                if (e.message?.contains("EADDRNOTAVAIL", ignoreCase = true) == true) addressGone = true
                 log("bind :$port failed: ${e.message}")
             }
         }
@@ -214,6 +217,18 @@ class EasyConnProber(
             // …unless they are OURS. Two connects in a row leave the previous prober's servers closing, and
             // blaming the official app there sends the rider to force-stop something that is not running —
             // seen on 2026-08-20 18:51:19, all three ports EADDRINUSE 33 s after our own previous attempt.
+            // The address vanished under us — typically our own Wi-Fi Direct group was just removed. Nobody
+            // is holding anything, so telling the rider to wait or to close another app is wrong on both
+            // counts (2026-08-20 20:23: all three ports EADDRNOTAVAIL right after the group came down).
+            if (addressGone) {
+                log(
+                    "!! the address ${myIp.hostAddress} no longer exists — the bike network came down under us. " +
+                        "Nothing is holding the ports; connect again to build a fresh one.",
+                )
+                ConnectionState.set(Phase.ERROR, "la red de la moto se cayó — vuelve a conectar")
+                stop()
+                return
+            }
             if (BikeLink.prober !== this) {
                 log(
                     "!! link ports are still held by our OWN previous connect (it is shutting down). " +

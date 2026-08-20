@@ -700,6 +700,13 @@ class PhoneHotspotTransport(
         /** Let the framework settle after retiring a leftover group, before re-issuing the request. */
         /** Let the radio settle after peer discovery stops, before the group is built (the official app waits too). */
     /** How often to ask who is associated to our group while the dash is supposed to be joining. */
+    /** Interface names Android gives a local-only hotspot, by OEM. */
+    private val AP_IFACE_PREFIXES = listOf("ap", "softap", "swlan", "wlan1")
+
+    /** How long to wait for the access point to get its own address, and how often to look. */
+    private const val AP_IP_WAIT_MS = 5_000L
+    private const val AP_IP_POLL_MS = 250L
+
     private const val CLIENT_WATCH_MS = 3_000L
 
     private const val DISCOVERY_SETTLE_MS = 400L
