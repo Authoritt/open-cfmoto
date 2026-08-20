@@ -13,6 +13,7 @@ import android.database.ContentObserver
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.VolumeProvider
 import android.media.AudioTrack
 import android.media.MediaMetadata
 import android.media.session.MediaSession
@@ -102,6 +103,12 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
      */
     @Volatile private var sawExternalKey = false
 
+    /** The session-level volume handler, when the platform accepts one. */
+    @Volatile private var remoteVolume: VolumeProvider? = null
+
+    /** Set the first time a press arrives through the session — from then on the stream pin is dead weight. */
+    @Volatile private var remoteVolumeProved = false
+
     /** Last known "the bike can reach us over Bluetooth", so a change can be logged and acted on once. */
     @Volatile private var btLinkUp: Boolean? = null
 
@@ -173,7 +180,7 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
                 val on = capturingForDash()
                 if (on) takeMediaFocus()
                 s.isActive = on
-                s.setPlaybackToLocal(mediaAttrs)
+                attachRemoteVolume(s)
                 if (on) maybePinVolume("start")
                 startVolumeObserver()
                 log("[BTN] bridge ready — mode=${if (on) "control dash (media focus + volume hijacked)" else "control media"} " +
@@ -541,6 +548,10 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
         // The official app never repurposes it either. Verified on the 450NK log (2026-08-20): the PXC
         // control link carries no key events at all, so Bluetooth is the only path and this is the only
         // lever we have.
+        if (remoteVolumeProved) {
+            if (pinnedVolume >= 0) unpinVolume()
+            return
+        }
         if (ButtonPresencePrefs.hasBothTrackDirections(context)) {
             if (pinnedVolume >= 0) unpinVolume()
             log("[BTN] skip pin ($reason) — this handlebar has its own ◀/▶, so ▲/▼ stay plain volume")
@@ -607,6 +618,68 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             log("[BTN] capture policy re-evaluated — now ${if (on) "ON (dash owns the handlebar)" else "OFF (media/volume)"}")
             setCaptureActive(on)
         }
+    }
+
+    /**
+     * Ask Android to hand this session the volume, instead of letting it land on the music stream.
+     *
+     * This is the LAST public lever for the dash's volume box, and it had never been tried. The bike's
+     * ▲/▼ arrive as an absolute-volume write; today the write lands on STREAM_MUSIC, we read the
+     * direction and put the level back, and the dash pops its box because from its side the rider pressed
+     * volume. The API that would fix it at the source — `AudioManager.setDeviceVolumeBehavior`, i.e. the
+     * "disable absolute volume" switch in developer options — is @SystemApi behind MODIFY_AUDIO_ROUTING
+     * and is simply not in android.jar (verified against API 36.1). [VolumeProvider] IS public.
+     *
+     * If the platform routes the dash's write here, [onSetVolumeTo] fires and the phone's own volume is
+     * never touched. If it does not, nothing is lost: the stream still moves and the ContentObserver
+     * catches it exactly as before. Both paths stay armed and the log says which one fired, so his next
+     * ride answers a question that cannot be answered from a desk.
+     */
+    private fun attachRemoteVolume(s: MediaSession) {
+        val max = try { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) } catch (_: Exception) { 15 }
+        val now = try { audio.getStreamVolume(AudioManager.STREAM_MUSIC) } catch (_: Exception) { max / 2 }
+        val provider = object : VolumeProvider(VOLUME_CONTROL_ABSOLUTE, max, now.coerceIn(0, max)) {
+            override fun onSetVolumeTo(volume: Int) {
+                val base = currentVolume
+                log("[BTN] *** remote volume: onSetVolumeTo($volume) from $base — the rocker reached us WITHOUT touching the phone's volume ***")
+                onRemoteVolume(volume - base)
+                setCurrentVolume(base) // stay put, exactly like the stream pin — the level is not the point
+            }
+
+            override fun onAdjustVolume(direction: Int) {
+                if (direction == 0) return
+                log("[BTN] *** remote volume: onAdjustVolume($direction) — the rocker reached us WITHOUT touching the phone's volume ***")
+                onRemoteVolume(direction)
+            }
+        }
+        remoteVolume = provider
+        try {
+            s.setPlaybackToRemote(provider)
+            log("[BTN] session volume set to REMOTE — trying to catch ▲/▼ before they reach the phone's volume")
+        } catch (e: Exception) {
+            log("[BTN] remote volume unavailable ($e) — staying on the stream + observer path")
+            runCatching { s.setPlaybackToLocal(mediaAttrs) }
+            remoteVolume = null
+        }
+    }
+
+    /**
+     * A ▲/▼ that arrived through the session instead of the stream. Same gestures as the observer path,
+     * and proof that the stream pin is no longer needed: drop it, so the rider gets their volume back.
+     */
+    private fun onRemoteVolume(jump: Int) {
+        if (!capturingForDash()) return
+        sawExternalKey = true
+        ButtonPresencePrefs.markVolumeSeen(context)
+        if (!remoteVolumeProved) {
+            remoteVolumeProved = true
+            log("[BTN] the dash's rocker comes through the session — releasing the phone's volume for good")
+            unpinVolume()
+        }
+        val up = jump > 0
+        val single = if (up) ButtonGesture.NAV_BACK else ButtonGesture.NAV_FWD
+        val double = if (up) ButtonGesture.NAV_BACK_DOUBLE else ButtonGesture.NAV_FWD_DOUBLE
+        detectDoubleTap(single, double, kotlin.math.abs(jump) >= DOUBLE_TAP_STEPS)
     }
 
     /** Re-apply the hold/release decision — called when the rider flips the switch. */
