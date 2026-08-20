@@ -9,6 +9,7 @@
 // gets pinned as this bike's connector and sends the rider on.
 package dev.zanderp.opencfmoto.ui.scan
 
+import android.os.Build
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -202,13 +203,31 @@ fun ScanScreen(nav: NavController) {
     val nearbyLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         LogBus.log("[scan] nearby-devices permission ${if (ok) "granted" else "denied"}")
     }
+    // The BLE connector additionally SCANS for the dash and opens a GATT connection, which on Android 12+
+    // are two more runtime permissions. Skipping them is not theoretical: on the real Rieju the scan threw
+    // and the log read "could not start the BLE scan", after which the blind dial to the QR address sat
+    // silent for 25 s. Asked here for the same reason as the nearby-devices grant — pairing is the moment
+    // the rider is deliberately setting this bike up, with an Activity in hand.
+    val bleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
+        LogBus.log("[scan] bluetooth permissions: " + res.entries.joinToString { "${it.key.substringAfterLast('.')}=${it.value}" })
+    }
     LaunchedEffect(pairedQr, connectorRefresh) {
         val qr = pairedQr ?: return@LaunchedEffect
         val mode = BikeMemory.effectiveMode(ctx, qr)
-        if (!usesWifiDirect(mode) || NearbyDevices.granted(ctx)) return@LaunchedEffect
-        LogBus.log("[scan] '$mode' needs Wi-Fi Direct — asking for the nearby-devices permission before Connect")
-        NearbyDevices.markAsked(ctx)
-        nearbyLauncher.launch(NearbyDevices.PERMISSION)
+        if (usesWifiDirect(mode) && !NearbyDevices.granted(ctx)) {
+            LogBus.log("[scan] '$mode' needs Wi-Fi Direct — asking for the nearby-devices permission before Connect")
+            NearbyDevices.markAsked(ctx)
+            nearbyLauncher.launch(NearbyDevices.PERMISSION)
+            return@LaunchedEffect
+        }
+        if (mode == TransportKind.PHONE_HOTSPOT && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val missing = listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+                .filter { ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED }
+            if (missing.isNotEmpty()) {
+                LogBus.log("[scan] this bike hands its Wi-Fi credentials over Bluetooth — asking for ${missing.size} bluetooth permission(s)")
+                bleLauncher.launch(missing.toTypedArray())
+            }
+        }
     }
 
     // Run the connect. Deliberately NOT a new connection path: prepareFreeRide + startCfmotoMap with

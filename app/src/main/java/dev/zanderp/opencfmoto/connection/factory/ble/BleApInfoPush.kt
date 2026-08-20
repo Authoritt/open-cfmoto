@@ -192,13 +192,22 @@ class BleApInfoPush(
         val settings = android.bluetooth.le.ScanSettings.Builder()
             .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
-        val ok = runCatching {
+        // BLUETOOTH_SCAN is a RUNTIME permission on Android 12+, and without it startScan throws a
+        // SecurityException — which is exactly what happened on the rider's phone. Say so by name: the
+        // first version of this just logged "could not start" and left us guessing.
+        val scanErr = runCatching {
             // Unfiltered on purpose: we must also catch the ±1 address and a dash that advertises the
             // service without matching the QR at all. The window is short and we stop on the first hit.
             scanner.startScan(null, settings, callback)
-        }.isSuccess
-        if (!ok) {
-            log("[BLE-AP] could not start the BLE scan — dialling the QR address directly")
+        }.exceptionOrNull()
+        if (scanErr != null) {
+            val hint = if (!hasScanPermission()) {
+                " — BLUETOOTH_SCAN is not granted (Android 12+ needs it at runtime)"
+            } else {
+                ""
+            }
+            log("[BLE-AP] could not start the BLE scan: ${scanErr.javaClass.simpleName}: ${scanErr.message}$hint")
+            log("[BLE-AP] dialling the QR address directly instead")
             if (picked.compareAndSet(false, true)) onFound(fallback, "QR address, scan unavailable")
             return
         }
@@ -218,6 +227,12 @@ class BleApInfoPush(
         }, SCAN_MS)
     }
 
+    /** Android 12+ gates BLE scanning behind BLUETOOTH_SCAN; below that it rides on location. */
+    private fun hasScanPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     /** Exact, or the ±1 last-octet Wi-Fi/BT offset seen on Carbit units (see BikeWifiP2p.macMatches). */
     private fun macMatchesWithOffset(want: String, peer: String): Boolean {
         val w = want.filter { it.isLetterOrDigit() }.lowercase()
@@ -231,6 +246,25 @@ class BleApInfoPush(
     }
 
     private fun connectGatt(device: android.bluetooth.BluetoothDevice) {
+        // Three things decide whether this dial can ever succeed, and all three are free to ask BEFORE
+        // waiting 25 s for silence. bondState NONE on a dash that only serves bonded clients, or a
+        // CLASSIC-only device when we force TRANSPORT_LE, both look identical from the outside: a
+        // connect that is simply never answered.
+        val bond = when (runCatching { device.bondState }.getOrNull()) {
+            android.bluetooth.BluetoothDevice.BOND_BONDED -> "BONDED"
+            android.bluetooth.BluetoothDevice.BOND_BONDING -> "BONDING"
+            android.bluetooth.BluetoothDevice.BOND_NONE -> "NOT paired"
+            else -> "unknown"
+        }
+        val kind = when (runCatching { device.type }.getOrNull()) {
+            android.bluetooth.BluetoothDevice.DEVICE_TYPE_LE -> "LE"
+            android.bluetooth.BluetoothDevice.DEVICE_TYPE_CLASSIC -> "CLASSIC (not LE! that would explain silence on TRANSPORT_LE)"
+            android.bluetooth.BluetoothDevice.DEVICE_TYPE_DUAL -> "DUAL"
+            else -> "unknown (never scanned/bonded — Android has no record of it)"
+        }
+        val name = runCatching { device.name }.getOrNull().orEmpty()
+        log("[BLE-AP] target ${device.address}: bond=$bond type=$kind" + (if (name.isNotBlank()) " name='$name'" else ""))
+
         gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             device.connectGatt(context, false, gattCallback, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
         } else {
