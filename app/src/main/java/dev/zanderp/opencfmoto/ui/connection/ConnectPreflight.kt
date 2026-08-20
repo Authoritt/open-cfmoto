@@ -17,6 +17,8 @@ import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.NearbyDevices
 import dev.zanderp.opencfmoto.QrData
+import dev.zanderp.opencfmoto.WifiGate
+import dev.zanderp.opencfmoto.ui.components.RadioNeed
 import dev.zanderp.opencfmoto.connection.factory.TransportKind
 import dev.zanderp.opencfmoto.connection.factory.usesWifiDirect
 
@@ -40,7 +42,11 @@ import dev.zanderp.opencfmoto.connection.factory.usesWifiDirect
  * @return true when the connect may proceed; false when a prompt was raised — the grant arrives
  *   asynchronously and the rider taps Connect again, the same shape as the existing location gate.
  */
-fun ensureConnectorReady(activity: Activity, qr: QrData?): Boolean {
+fun ensureConnectorReady(
+    activity: Activity,
+    qr: QrData?,
+    onRadioNeeded: (RadioNeed) -> Unit = {},
+): Boolean {
     qr ?: return true
     val mode = runCatching { BikeMemory.effectiveMode(activity, qr) }.getOrNull() ?: return true
 
@@ -65,14 +71,23 @@ fun ensureConnectorReady(activity: Activity, qr: QrData?): Boolean {
         // from a connect that simply times out. Raise the system's own enable dialog.
         val adapter = (activity.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         if (adapter != null && !adapter.isEnabled) {
+            // Radio OFF is reported, not acted on: the caller shows OUR dialog (RadioNeededDialog) first,
+            // so the rider reads a Spanish explanation of why the bike needs it before the platform's own
+            // system-styled English prompt appears.
             LogBus.log("[preflight] this bike needs Bluetooth and it is OFF — asking the rider to turn it on")
-            val asked = runCatching {
-                activity.startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-            }.isSuccess
-            if (asked) return false
+            onRadioNeeded(RadioNeed.BLUETOOTH)
+            return false
         }
     }
     return true
+}
+
+/** Fire the platform action for a radio the rider agreed to switch on, from our dialog's button. */
+fun enableRadio(activity: Activity, need: RadioNeed) {
+    when (need) {
+        RadioNeed.BLUETOOTH -> runCatching { activity.startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
+        RadioNeed.WIFI -> WifiGate.openWifiSettings(activity)
+    }
 }
 
 private const val REQ_CONNECTOR = 0x0C07

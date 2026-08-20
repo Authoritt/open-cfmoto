@@ -1114,4 +1114,9 @@
     <string name="ovk_dash_connect_first">Connect to the bike first</string>
     <string name="ovk_btn_needs_bt_on">Turn Bluetooth on so the handlebar controls the dash — otherwise ▲/▼ just change your phone volume.</string>
     <string name="ovk_btn_needs_bt_permission">Allow the Bluetooth permission so the handlebar controls the dash — otherwise ▲/▼ just change your phone volume.</string>
+    <string name="ovk_radio_wifi_title">Turn on Wi-Fi</string>
+    <string name="ovk_radio_wifi_body">Your bike connects over Wi-Fi and the phone’s Wi-Fi is off. Android will not let the app switch it on, so this opens the panel where you can.</string>
+    <string name="ovk_radio_bt_title">Turn on Bluetooth</string>
+    <string name="ovk_radio_bt_body">This bike receives the network password over Bluetooth, and Bluetooth is off. Without it the dash cannot connect.</string>
+    <string name="ovk_radio_enable">Turn on</string>
 </resources>

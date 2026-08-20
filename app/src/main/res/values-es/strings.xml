@@ -1093,4 +1093,9 @@
     <string name="ovk_dash_connect_first">Conecta la moto primero</string>
     <string name="ovk_btn_needs_bt_on">Enciende el Bluetooth para manejar el tablero con el manillar — si no, ▲/▼ sólo cambian el volumen del teléfono.</string>
     <string name="ovk_btn_needs_bt_permission">Concede el permiso de Bluetooth para manejar el tablero con el manillar — si no, ▲/▼ sólo cambian el volumen del teléfono.</string>
+    <string name="ovk_radio_wifi_title">Enciende el Wi-Fi</string>
+    <string name="ovk_radio_wifi_body">Tu moto se conecta por Wi-Fi y el del teléfono está apagado. Android no deja que la app lo encienda, pero te abro el panel para que lo hagas de un toque.</string>
+    <string name="ovk_radio_bt_title">Enciende el Bluetooth</string>
+    <string name="ovk_radio_bt_body">Esta moto recibe la clave de la red por Bluetooth y lo tienes apagado. Sin él, el tablero no puede conectarse.</string>
+    <string name="ovk_radio_enable">Encender</string>
 </resources>

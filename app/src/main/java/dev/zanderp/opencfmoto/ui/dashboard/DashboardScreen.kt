@@ -61,6 +61,9 @@ import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.components.PrimaryButton
 import dev.zanderp.opencfmoto.ui.components.StatusKind
 import dev.zanderp.opencfmoto.ui.components.Tile
+import dev.zanderp.opencfmoto.ui.components.RadioNeed
+import dev.zanderp.opencfmoto.ui.components.RadioNeededDialog
+import dev.zanderp.opencfmoto.ui.connection.enableRadio
 import dev.zanderp.opencfmoto.ui.connection.ensureConnectorReady
 import dev.zanderp.opencfmoto.ui.connection.findActivity
 import dev.zanderp.opencfmoto.ui.connection.rememberConnectionStatus
@@ -86,6 +89,8 @@ fun DashboardScreen(nav: NavController) {
     val hasBike = remember { BikeMemory.lastQr(ctx) != null }
 
     var showMode by remember { mutableStateOf(false) }
+    // A radio the bike needs is OFF: explain it in our own words before the platform's prompt.
+    var radioNeeded by remember { mutableStateOf<RadioNeed?>(null) }
     var showConsent by remember { mutableStateOf(false) }
 
     // Foreground fallback: when the cockpit resumes and the bike is in range, auto-connect the built-in
@@ -125,7 +130,7 @@ fun DashboardScreen(nav: NavController) {
         // entry point that can't ask is a connect entry point that fails silently, so every one of them
         // asks now. Returns false when it had to prompt: the grant lands asynchronously and the rider taps
         // Conectar again, which is the same pattern the location gate already uses.
-        if (!ensureConnectorReady(activity, BikeMemory.lastQr(ctx))) return
+        if (!ensureConnectorReady(activity, BikeMemory.lastQr(ctx)) { radioNeeded = it }) return
         CfmotoConnect.startCfmotoMap(activity, preferFactory = true)
     }
     fun afterMode(mode: String) {
@@ -212,6 +217,17 @@ fun DashboardScreen(nav: NavController) {
             onDismiss = { showMode = false },
         )
     }
+    radioNeeded?.let { need ->
+        RadioNeededDialog(
+            need = need,
+            onEnable = {
+                radioNeeded = null
+                ctx.findActivity()?.let { enableRadio(it, need) }
+            },
+            onDismiss = { radioNeeded = null },
+        )
+    }
+
     if (showConsent) {
         AutoConnectDialog(
             onAllow = {
