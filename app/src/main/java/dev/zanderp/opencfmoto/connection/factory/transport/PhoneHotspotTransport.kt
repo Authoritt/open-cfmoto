@@ -464,7 +464,39 @@ class PhoneHotspotTransport(
                 }
             }
 
-            attemptCreate(custom?.config)
+            // Stop Wi-Fi Direct peer discovery FIRST, and only build the group from its callback.
+            //
+            // This is the step the official app takes that we did not, and it was invisible from the
+            // protocol side: `WifiHotspotUtils.createCustomAP()` does not call `createCustomAP_p()`
+            // directly — it hands it to `WifiDirectScanner.B(runnable)`, whose whole body is
+            // `stopPeerDiscovery(...)` with the group creation as its continuation. A group owner that is
+            // still channel-hopping for peers beacons badly, and a client that cannot hear the beacon does
+            // exactly what the Rieju dash did for four sessions: ask for a network, take the credentials,
+            // answer every poll with "still waiting", and never associate — on BOTH bands (5785 MHz and
+            // 2462 MHz, 2026-08-20 19:10). The discovery may not even be ours: any earlier scan in this
+            // process leaves it running.
+            //
+            // Never fatal: if the call is rejected or throws, we build the group anyway, which is what we
+            // have always done.
+            val startCreate = { attemptCreate(custom?.config) }
+            runCatching {
+                mgr.stopPeerDiscovery(
+                    chan,
+                    object : WifiP2pManager.ActionListener {
+                        override fun onSuccess() {
+                            log("peer discovery stopped — building the group on a radio that is not scanning (what the official app does)")
+                            handler.postDelayed(startCreate, DISCOVERY_SETTLE_MS)
+                        }
+                        override fun onFailure(reason: Int) {
+                            log("stopPeerDiscovery rejected (${WifiDirectPreflight.reasonName(reason)}) — building the group anyway")
+                            handler.postDelayed(startCreate, DISCOVERY_SETTLE_MS)
+                        }
+                    },
+                )
+            }.onFailure { e ->
+                log("stopPeerDiscovery threw: ${e.message} — building the group anyway")
+                startCreate()
+            }
         }
 
     /**
@@ -563,7 +595,10 @@ class PhoneHotspotTransport(
         private const val GROUP_POLL_INTERVAL_MS = 500L
 
         /** Let the framework settle after retiring a leftover group, before re-issuing the request. */
-        private const val REPAIR_SETTLE_MS = 400L
+        /** Let the radio settle after peer discovery stops, before the group is built (the official app waits too). */
+    private const val DISCOVERY_SETTLE_MS = 400L
+
+    private const val REPAIR_SETTLE_MS = 400L
 
         /** Cap on the "which group is actually up?" question, so the repair can never hang on its callback. */
         private const val GROUP_INFO_TIMEOUT_MS = 1_500L
