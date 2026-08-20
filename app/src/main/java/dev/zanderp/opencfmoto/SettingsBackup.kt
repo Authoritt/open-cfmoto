@@ -46,12 +46,10 @@ object SettingsBackup {
         s.put("resolutionMode", VideoPrefs.resolution(context).name)
         s.put("profileOverride", ProfilePrefs.get(context).id)
         s.put("controlAa", ButtonMode.isControlAa(context))
-        // The ▲/▼ Navigate-vs-Volume choice belongs here too. It was missing, and that had a cost: when
-        // the fork took its own applicationId (4e5fa19) Android saw a NEW app with an empty data dir, so
-        // every learned per-bike belief reset — including this one — and a rider who had set it once had
-        // no way to carry it over, not even by exporting. A setting the rider chose should outlive an
-        // install.
-        s.put("handlebarVolumeNavigate", HandlebarVolumeMode.isNavigate(context))
+        // `controlAa` IS the handlebar switch now (inverted: true = drives the dash), so one key carries
+        // it. It matters that it is here at all: when the fork took its own applicationId (4e5fa19)
+        // Android saw a NEW app with an empty data dir and every per-bike belief reset, and a rider had no
+        // way to carry their choice over. A setting someone chose should outlive an install.
         s.put("forceNonTouch", AppSettings.forceNonTouch(context))
         s.put("forceTouch", AppSettings.forceTouch(context))
         s.put("wifiTransport", AppSettings.transport(context).id)
@@ -136,11 +134,7 @@ object SettingsBackup {
             ProfilePrefs.set(context, ProfileOverride.byId(s.optString("profileOverride")))
         }
         if (s.has("controlAa")) ButtonMode.set(context, s.optBoolean("controlAa"))
-        // Importing IS an explicit act, so this also re-arms the "the rider decided" flag that stops the
-        // absent-rocker probe from overriding it.
-        if (s.has("handlebarVolumeNavigate")) {
-            HandlebarVolumeMode.set(context, s.optBoolean("handlebarVolumeNavigate"))
-        }
+
         if (s.has("forceNonTouch")) AppSettings.setForceNonTouch(context, s.optBoolean("forceNonTouch"))
         if (s.has("forceTouch")) AppSettings.setForceTouch(context, s.optBoolean("forceTouch"))
         if (s.has("wifiTransport")) {

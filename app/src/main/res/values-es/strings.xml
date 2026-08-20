@@ -696,9 +696,9 @@
     <string name="ovk_controls_subtitle">El tablero sin tocarlo</string>
     <string name="ovk_volume">Volumen</string>
     <string name="ovk_navigate">Navegar</string>
-    <string name="ovk_btn_rocker_works">Rueda ▲▼: detectada en esta moto</string>
-    <string name="ovk_btn_rocker_absent">Rueda ▲▼: sin detectar — pon Navegar para usarla igual</string>
-    <string name="ovk_btn_rocker_untested">Rueda ▲▼: aún sin usarla en esta moto</string>
+    <string name="ovk_handlebar_audio">El manillar maneja el audio</string>
+    <string name="ovk_handlebar_audio_on">Encendido: los botones suben el volumen y cambian de canción en el teléfono.</string>
+    <string name="ovk_handlebar_audio_off">Apagado: los botones manejan el tablero — el mapa, o Android Auto.</string>
     <string name="ovk_voice">Voz</string>
     <string name="ovk_home">Inicio</string>
     <string name="ovk_back">Atrás</string>

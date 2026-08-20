@@ -7,25 +7,16 @@ package dev.zanderp.opencfmoto
 import android.content.Context
 
 /**
- * What the bike's Bluetooth media buttons (track/play-pause) should do:
- *   true  (default) = control ANDROID AUTO UI — [MediaButtonBridge] keeps exclusive AVRCP ownership
- *                     and remaps keys to navigation. Music apps must not get the bars; control
- *                     playback by navigating the AA UI with those same buttons.
- *   false           = control MEDIA — buttons skip tracks / pause music as normal.
+ * Kept as the older name for the same single decision — see [HandlebarAudioMode], which owns it now.
  *
- * Persisted so the choice survives restarts.
+ * `controlAa == true` is "the handlebar drives the dash", the exact inverse of "controls audio". It
+ * used to be its own stored flag, which meant two switches could disagree about one thing; they are
+ * one value now, so a rider changing either in any screen changes the same setting.
  */
 object ButtonMode {
-    private const val PREF = "button_mode"
-    private const val KEY = "controlAa"
-
-    private fun prefs(context: Context) =
-        context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-
-    fun isControlAa(context: Context): Boolean =
-        BikeScope.getBoolean(prefs(context), context, KEY, true)
+    fun isControlAa(context: Context): Boolean = !HandlebarAudioMode.isAudio(context)
 
     fun set(context: Context, controlAa: Boolean) {
-        BikeScope.putBoolean(prefs(context), context, KEY, controlAa)
+        HandlebarAudioMode.setAudio(context, !controlAa)
     }
 }

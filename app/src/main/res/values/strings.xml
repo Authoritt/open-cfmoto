@@ -708,9 +708,9 @@
     <string name="ovk_controls_subtitle">The dash without touching it</string>
     <string name="ovk_volume">Volume</string>
     <string name="ovk_navigate">Navigate</string>
-    <string name="ovk_btn_rocker_works">▲▼ rocker: detected on this bike</string>
-    <string name="ovk_btn_rocker_absent">▲▼ rocker: not detected — set Navigate to use it anyway</string>
-    <string name="ovk_btn_rocker_untested">▲▼ rocker: not seen yet on this bike</string>
+    <string name="ovk_handlebar_audio">Handlebar controls audio</string>
+    <string name="ovk_handlebar_audio_on">On: the bars change volume and skip tracks on the phone.</string>
+    <string name="ovk_handlebar_audio_off">Off: the bars drive the dash — the map, or Android Auto.</string>
     <string name="ovk_voice">Voice</string>
     <string name="ovk_home">Home</string>
     <string name="ovk_back">Back</string>
