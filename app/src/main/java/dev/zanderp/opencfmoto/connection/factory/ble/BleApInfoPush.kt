@@ -397,7 +397,23 @@ class BleApInfoPush(
         val ph = Phase(name, resume)
         phase = ph
         val timeout = Runnable {
-            if (!ph.settled.get()) finishFailure("timeout after ${timeoutMs}ms waiting for ${ph.name}")
+            if (ph.settled.get()) return@Runnable
+            // A phase-2 timeout is NOT a dead link. The dash has been answering every poll — it simply has
+            // not joined the network we offered. Tearing the GATT down there is what left the second band's
+            // group with nobody to hand it to: "cannot send 0x52: the BLE session is DEAD" (field log
+            // 2026-08-20 18:35). Keep the link and rewind to NET_REQUESTED so the caller can offer another
+            // network over the same session; a real failure still goes the hard way below.
+            if (ph.name == PHASE_AP_INFO && session == Session.LIVE) {
+                log(
+                    "[BLE-AP] no join within ${timeoutMs}ms — the dash is still answering, so the BLE link stays " +
+                        "open and another network can be offered on it",
+                )
+                cancelNetPoll()
+                step = Step.NET_REQUESTED
+                settlePhase(false)
+                return@Runnable
+            }
+            finishFailure("timeout after ${timeoutMs}ms waiting for ${ph.name}")
         }
         ph.timeout = timeout
         handler.postDelayed(timeout, timeoutMs)
@@ -639,7 +655,7 @@ class BleApInfoPush(
                 // it is the only value anyone has ever seen; the code table is unknown. So we log it and carry
                 // on whatever it says — guessing that some value means "not ready" would strand a dash that is
                 // perfectly fine. When a second value shows up in a log, that is when a table can be built.
-                log("[BLE-AP] <- 0x50 response status=${status ?: "(none in payload)"} — recorded, not judged")
+                log("[BLE-AP] <- 0x50 response status=${status ?: "(none)"} → ${statusMeaning(status)}")
                 finishHandshake(answered = true)
             }
             // A reply to one of our polls (above). `0` = SUCCEED: the dash is on the network and the handoff
@@ -652,7 +668,7 @@ class BleApInfoPush(
                     log("[BLE-AP] <- 0x50 poll answered status=0 (SUCCEED) — the dash JOINED the group")
                     finishSuccess()
                 } else {
-                    log("[BLE-AP] <- 0x50 poll answered status=${status ?: "(none)"} — not joined yet, asking again")
+                    log("[BLE-AP] <- 0x50 poll answered status=${status ?: "(none)"} → ${statusMeaning(status)}; asking again")
                 }
             }
             // Only an ack that answers OUR credentials completes the handoff. One arriving earlier is reported
@@ -700,6 +716,24 @@ class BleApInfoPush(
          * because missing it is not fatal (we proceed anyway) and the rider is waiting.
          */
         private const val NET_REPLY_TIMEOUT_MS = 4_000L
+
+        /**
+         * What a build-net status MEANS, from Carbit's own table plus what real dashes have sent.
+         *
+         * Two values have now been seen on the Rieju: `2` on every poll, and `-1` on a first ask
+         * (2026-08-20 18:35). `-1` is the one worth translating — the dash is waiting for someone to
+         * authorise the connection ON ITS OWN SCREEN, which no amount of polling from here will resolve.
+         */
+        fun statusMeaning(status: String?): String = when (status) {
+            "0" -> "SUCCEED — the dash is on the network"
+            "1" -> "NEED_PHONE_BUILD — build the network"
+            "2" -> "USE_PHONE_AP — waiting for your network"
+            "-1" -> "AUTH_PENDING — the DASH is waiting for someone to authorise this on its own screen"
+            "-2" -> "AUTH_FAIL — the dash refused the authorisation"
+            "-3" -> "NONE"
+            null -> "(no status in payload)"
+            else -> "unknown code"
+        }
 
         /** `"status": <int>` in the dash's JSON, tolerating the tabs/newlines it actually sends. */
         private val STATUS_REGEX = Regex("\"status\"\\s*:\\s*(-?\\d+)")
