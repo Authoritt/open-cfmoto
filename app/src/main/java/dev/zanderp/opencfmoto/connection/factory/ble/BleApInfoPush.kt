@@ -119,7 +119,118 @@ class BleApInfoPush(
 
         handler.postDelayed({ if (!done) finishFailure("timeout after ${timeoutMs}ms") }, timeoutMs)
 
-        log("[BLE-AP] connecting to $mac …")
+        // Find the dash before dialling it. A blind connect to the QR's address timed out on the real
+        // Rieju with onConnectionStateChange never firing at all, and there are two known reasons why
+        // that address can be the wrong door: (a) a connect to a never-scanned device often goes
+        // nowhere, and (b) on Carbit units the BLE address can differ from the QR's `bm=` by one on the
+        // last octet — the same Wi-Fi/BT offset BikeWifiP2p.macMatches already handles for the P2P join.
+        // So scan first, accepting either the advertised B360 service or an address that matches exactly
+        // or ±1, and dial whatever the scan actually saw. If the scan finds nothing we still try the
+        // QR address directly, so this can only add reach, never take it away.
+        scanThenConnect(adapter, device, btMac, service) { target, how ->
+            log("[BLE-AP] connecting to ${target.address} ($how) …")
+            connectGatt(target)
+        }
+        return@suspendCancellableCoroutine
+    }
+
+    /**
+     * Scan up to [SCAN_MS] for the dash, then hand the winner to [onFound]. Falls back to [fallback]
+     * (the QR's own address) when the scan sees nothing, so behaviour is never worse than before.
+     */
+    private fun scanThenConnect(
+        adapter: android.bluetooth.BluetoothAdapter,
+        fallback: android.bluetooth.BluetoothDevice,
+        wantMac: String,
+        service: UUID,
+        onFound: (android.bluetooth.BluetoothDevice, String) -> Unit,
+    ) {
+        val scanner = try { adapter.bluetoothLeScanner } catch (_: Exception) { null }
+        if (scanner == null) {
+            log("[BLE-AP] no BLE scanner — dialling the QR address directly")
+            onFound(fallback, "QR address, no scanner")
+            return
+        }
+        val picked = java.util.concurrent.atomic.AtomicBoolean(false)
+        // Everything the scan saw, so a failure says what WAS in the air instead of just "nothing".
+        val seen = java.util.LinkedHashMap<String, String>()
+        var cb: android.bluetooth.le.ScanCallback? = null
+        fun stop() { cb?.let { c -> runCatching { scanner.stopScan(c) } }; cb = null }
+        val callback = object : android.bluetooth.le.ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult) {
+                val dev = result.device ?: return
+                val addr = dev.address ?: return
+                val advertisesService = result.scanRecord?.serviceUuids
+                    ?.any { it.uuid == service } == true
+                if (seen.size < SCAN_LOG_CAP && !seen.containsKey(addr)) {
+                    val nm = runCatching { dev.name }.getOrNull().orEmpty()
+                    val svcs = result.scanRecord?.serviceUuids?.joinToString(",") { it.uuid.toString().take(8) }.orEmpty()
+                    seen[addr] = "rssi=${result.rssi}" +
+                        (if (nm.isNotBlank()) " name='" + nm + "'" else "") +
+                        (if (svcs.isNotBlank()) " svc=[" + svcs + "]" else "")
+                }
+                val how = when {
+                    addr.equals(wantMac, ignoreCase = true) -> "scanned, exact address"
+                    macMatchesWithOffset(wantMac, addr) -> "scanned, address ±1 from the QR"
+                    advertisesService -> "scanned, advertises the AP-info service"
+                    else -> return
+                }
+                if (!picked.compareAndSet(false, true)) return
+                stop()
+                handler.post { if (!done) onFound(dev, how) }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                log("[BLE-AP] BLE scan failed ($errorCode) — dialling the QR address directly")
+                if (picked.compareAndSet(false, true)) {
+                    stop()
+                    handler.post { if (!done) onFound(fallback, "QR address, scan failed") }
+                }
+            }
+        }
+        cb = callback
+        val settings = android.bluetooth.le.ScanSettings.Builder()
+            .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        val ok = runCatching {
+            // Unfiltered on purpose: we must also catch the ±1 address and a dash that advertises the
+            // service without matching the QR at all. The window is short and we stop on the first hit.
+            scanner.startScan(null, settings, callback)
+        }.isSuccess
+        if (!ok) {
+            log("[BLE-AP] could not start the BLE scan — dialling the QR address directly")
+            if (picked.compareAndSet(false, true)) onFound(fallback, "QR address, scan unavailable")
+            return
+        }
+        log("[BLE-AP] scanning ${SCAN_MS}ms for the dash (address $wantMac, ±1, or service $service) …")
+        handler.postDelayed({
+            if (picked.compareAndSet(false, true)) {
+                stop()
+                if (seen.isEmpty()) {
+                    log("[BLE-AP] scan saw NOTHING at all in ${SCAN_MS}ms — is the dash on and in range? is its Bluetooth advertising?")
+                } else {
+                    log("[BLE-AP] scan saw ${seen.size} device(s), none matching $wantMac (±1) nor advertising $service:")
+                    seen.forEach { (a, d) -> log("[BLE-AP]   seen $a $d") }
+                }
+                log("[BLE-AP] scan saw no matching dash — dialling the QR address anyway")
+                if (!done) onFound(fallback, "QR address, scan found nothing")
+            }
+        }, SCAN_MS)
+    }
+
+    /** Exact, or the ±1 last-octet Wi-Fi/BT offset seen on Carbit units (see BikeWifiP2p.macMatches). */
+    private fun macMatchesWithOffset(want: String, peer: String): Boolean {
+        val w = want.filter { it.isLetterOrDigit() }.lowercase()
+        val p = peer.filter { it.isLetterOrDigit() }.lowercase()
+        if (w.length != 12 || p.length != 12) return false
+        if (w == p) return true
+        if (w.dropLast(2) != p.dropLast(2)) return false
+        val a = w.takeLast(2).toIntOrNull(16) ?: return false
+        val b = p.takeLast(2).toIntOrNull(16) ?: return false
+        return kotlin.math.abs(a - b) == 1
+    }
+
+    private fun connectGatt(device: android.bluetooth.BluetoothDevice) {
         gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             device.connectGatt(context, false, gattCallback, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
         } else {
@@ -283,6 +394,12 @@ class BleApInfoPush(
         val DEFAULT_SERVICE_UUID: UUID = UUID.fromString("0000B360-D6D8-C7EC-BDF0-EAB1BFC6BCBC")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
         private const val DEFAULT_TIMEOUT_MS = 25_000L
+
+        /** How long we look for the dash before dialling the QR address blind. */
+        private const val SCAN_MS = 6_000L
+
+        /** Cap on the 'what else is advertising' diagnostic so one crowded street can't flood the log. */
+        private const val SCAN_LOG_CAP = 12
 
         /** EcBtp frame overhead: `START | cmd | len | … | xor | END` = 5 bytes around the payload. */
         private const val FRAME_OVERHEAD = 5
