@@ -9,6 +9,9 @@
 // gets pinned as this bike's connector and sends the rider on.
 package dev.zanderp.opencfmoto.ui.scan
 
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.Intent
 import android.os.Build
 import android.Manifest
 import android.annotation.SuppressLint
@@ -208,6 +211,9 @@ fun ScanScreen(nav: NavController) {
     // and the log read "could not start the BLE scan", after which the blind dial to the QR address sat
     // silent for 25 s. Asked here for the same reason as the nearby-devices grant — pairing is the moment
     // the rider is deliberately setting this bike up, with an Activity in hand.
+    val btEnableLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        LogBus.log("[scan] bluetooth enable dialog: " + if (r.resultCode == android.app.Activity.RESULT_OK) "turned on" else "declined")
+    }
     val bleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         LogBus.log("[scan] bluetooth permissions: " + res.entries.joinToString { "${it.key.substringAfterLast('.')}=${it.value}" })
     }
@@ -220,12 +226,23 @@ fun ScanScreen(nav: NavController) {
             nearbyLauncher.launch(NearbyDevices.PERMISSION)
             return@LaunchedEffect
         }
-        if (mode == TransportKind.PHONE_HOTSPOT && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val missing = listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-                .filter { ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED }
-            if (missing.isNotEmpty()) {
-                LogBus.log("[scan] this bike hands its Wi-Fi credentials over Bluetooth — asking for ${missing.size} bluetooth permission(s)")
-                bleLauncher.launch(missing.toTypedArray())
+        if (mode == TransportKind.PHONE_HOTSPOT) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val missing = listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+                    .filter { ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED }
+                if (missing.isNotEmpty()) {
+                    LogBus.log("[scan] this bike hands its Wi-Fi credentials over Bluetooth — asking for ${missing.size} bluetooth permission(s)")
+                    bleLauncher.launch(missing.toTypedArray())
+                    return@LaunchedEffect
+                }
+            }
+            // Granted but switched OFF is just as fatal, and the rider has no way to guess that from a
+            // connect that quietly times out. Ask with the system's own enable dialog instead of telling
+            // them to go find the toggle.
+            val adapter = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+            if (adapter != null && !adapter.isEnabled) {
+                LogBus.log("[scan] this bike needs Bluetooth and it is OFF — asking the rider to turn it on")
+                runCatching { btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
             }
         }
     }

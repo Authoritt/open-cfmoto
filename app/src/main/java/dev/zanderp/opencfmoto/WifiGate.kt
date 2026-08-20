@@ -78,6 +78,18 @@ object WifiGate {
     fun openWifiSettings(context: Context) {
         try {
             val flags = if (context is Activity) 0 else Intent.FLAG_ACTIVITY_NEW_TASK
+            // Android 10+ has a slide-up Wi-Fi PANEL that appears over the app: the rider flips the
+            // toggle and is already back where they were. The full Settings app (below) throws them out
+            // of the flow and they have to navigate back by hand — the difference between "one tap" and
+            // "where was I?" when the bike is waiting. An app still cannot turn Wi-Fi on by itself
+            // (blocked since Android 10), so a panel is as close as this gets.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    context.startActivity(Intent(Settings.Panel.ACTION_WIFI).addFlags(flags))
+                    return
+                } catch (_: Exception) {
+                }
+            }
             context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(flags))
         } catch (_: Exception) {
             try {
