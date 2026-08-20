@@ -198,10 +198,22 @@ class PhoneHotspotTransport(
         }
         val group0 = group ?: throw IllegalStateException("no Wi-Fi Direct group was created")
         if (!handedOver) {
-            // Unlike a phase-1 failure, here the group IS up — so the manual dialog is offering a network
-            // that actually exists and the rider can still finish the job by hand.
-            log("the dash did not acknowledge the creds — the group is up, so the rider can still join it by hand")
-            showReadableCreds(activity, group0, log)
+            // "Type this Wi-Fi on the dash" is dead advice on a Carbit dash: it has no keyboard and no way
+            // to enter a network at all — the rider told us so on 2026-08-20, after the app had asked him to
+            // do it. An instruction that cannot be followed is worse than silence: it moves the blame onto
+            // the person reading it. Say what actually happened instead, and only offer the manual route to
+            // bikes that can take it.
+            // Reaching here means the spec carried a BLE MAC (the no-mac case returned through
+            // manualFallback far above), so this dash is a Carbit unit with no keyboard and no network
+            // entry screen at all.
+            log(
+                "the dash took the credentials and never joined the network — nothing for the rider to do here: " +
+                    "this dash cannot be given a network by hand. Leaving the group up in case it joins late.",
+            )
+            dev.zanderp.opencfmoto.ConnectionState.set(
+                dev.zanderp.opencfmoto.Phase.ERROR,
+                activity.getString(dev.zanderp.opencfmoto.R.string.ovk_dash_never_joined),
+            )
         }
 
         // 4) Endpoint: phone is GO + PXC server at its GO address. No bindable Network (P2P), so the link
@@ -596,6 +608,9 @@ class PhoneHotspotTransport(
 
         /** Let the framework settle after retiring a leftover group, before re-issuing the request. */
         /** Let the radio settle after peer discovery stops, before the group is built (the official app waits too). */
+    /** How often to ask who is associated to our group while the dash is supposed to be joining. */
+    private const val CLIENT_WATCH_MS = 3_000L
+
     private const val DISCOVERY_SETTLE_MS = 400L
 
     private const val REPAIR_SETTLE_MS = 400L
