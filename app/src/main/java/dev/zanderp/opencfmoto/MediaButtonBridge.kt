@@ -536,6 +536,16 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
             }
             return
         }
+        // A pod with both of its own direction keys does not need the rocker, and using it is exactly what
+        // makes the dash pop its volume box on every press: from the bike's side you ARE pressing volume.
+        // The official app never repurposes it either. Verified on the 450NK log (2026-08-20): the PXC
+        // control link carries no key events at all, so Bluetooth is the only path and this is the only
+        // lever we have.
+        if (ButtonPresencePrefs.hasBothTrackDirections(context)) {
+            if (pinnedVolume >= 0) unpinVolume()
+            log("[BTN] skip pin ($reason) — this handlebar has its own ◀/▶, so ▲/▼ stay plain volume")
+            return
+        }
         if (!bikeCanReachUs()) {
             // Holding the volume for a handlebar that has no path here only takes the rider's volume
             // away for nothing.
@@ -682,6 +692,10 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
                     return
                 }
                 val relearn = pinnedVolume < 0
+                if (relearn && ButtonPresencePrefs.hasBothTrackDirections(context)) {
+                    lastVolume = now
+                    return
+                }
                 if (relearn && BikeLink.prober?.isStreaming != true) {
                     lastVolume = now
                     return
@@ -953,6 +967,14 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
         val held = heldFor(keyCode) ?: return
         sawExternalKey = true
         ButtonPresencePrefs.markTrackSeen(context)
+        if (held === heldFwd) ButtonPresencePrefs.markTrackDirection(context, forward = true)
+        if (held === heldBack) ButtonPresencePrefs.markTrackDirection(context, forward = false)
+        if (ButtonPresencePrefs.hasBothTrackDirections(context) && pinnedVolume >= 0) {
+            // This pod just proved it can steer both ways on its own. Give the rider back a rocker that
+            // is plain volume — no held level, no restore, and no volume box on the dash for every press.
+            log("[BTN] this handlebar steers with its own ◀/▶ — releasing ▲/▼ back to plain volume (no more volume box on the dash)")
+            unpinVolume()
+        }
         lastKeyAt = SystemClock.elapsedRealtime()
         if (repeatCount > 0) {
             // Setup → Hold detection off: ignore key-repeat so a long physical press stays a tap.
