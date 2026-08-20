@@ -1116,7 +1116,7 @@
     <string name="ovk_provider_aa_hint">Google/Waze: Android Auto paints the dash — connect first, then set the destination.</string>
     <string name="ovk_dash_connect_first">Connect to the bike first</string>
     <string name="ovk_btn_needs_bt_on">Turn Bluetooth on so the handlebar controls the dash — otherwise ▲/▼ just change your phone volume.</string>
-    <string name="ovk_btn_bike_not_connected">Bluetooth is on, but the bike is not connected to it — the handlebar cannot reach the phone. Connect it from the bike's Bluetooth menu (or tap the bike in Android's Bluetooth settings).</string>
+    <string name="ovk_btn_bike_not_connected">Bluetooth is on, but the bike is not connected to it — the handlebar cannot reach the phone. Connect it from the Bluetooth menu on the bike, or tap the bike in the Android Bluetooth settings.</string>
     <string name="ovk_btn_needs_bt_permission">Allow the Bluetooth permission so the handlebar controls the dash — otherwise ▲/▼ just change your phone volume.</string>
     <string name="ovk_radio_wifi_title">Turn on Wi-Fi</string>
     <string name="ovk_radio_wifi_body">Your bike connects over Wi-Fi and the phone’s Wi-Fi is off. Android will not let the app switch it on, so this opens the panel where you can.</string>
