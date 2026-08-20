@@ -689,23 +689,24 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
                 // this very press as the gesture. Never in Volume mode — there the rocker is the rider's
                 // volume control and must stay theirs.
                 val relearn = pinnedVolume < 0
-                if (relearn) {
-                    if (!HandlebarVolumeMode.isNavigate(context) || BikeLink.prober?.isStreaming != true) {
-                        lastVolume = now
-                        return
-                    }
-                    log("[BTN] ▲/▼ moved while nothing was pinned and the map is streaming — the rocker EXISTS; adopting it now and using THIS press")
-                    ButtonPresencePrefs.markVolumeSeen(context)
-                    cancelAbsentVolumeProbe()
+                if (relearn && (!HandlebarVolumeMode.isNavigate(context) || BikeLink.prober?.isStreaming != true)) {
+                    lastVolume = now
+                    return
                 }
 
                 // What the volume must read once we are done: the pin, or — while adopting — whatever the
                 // rider had before the dash touched it.
                 val base = if (relearn) (if (lastVolume >= 0) lastVolume else now) else pinnedVolume
-                if (now == base) return          // our own write, or nothing to do
+                // This observer watches ALL of Settings.System, so most of what arrives here is somebody
+                // else's business — screen brightness above all, which moves constantly while riding. Only
+                // an actual change in level is a button press; everything else leaves without a trace.
+                if (now == base) return
                 val jump = now - base            // signed, in Android volume steps
                 val up = jump > 0
                 val dir = if (up) "UP" else "DOWN"
+                if (relearn) {
+                    log("[BTN] ▲/▼ moved while nothing was pinned and the map is streaming — the rocker EXISTS; adopting it now and using THIS press")
+                }
                 ButtonPresencePrefs.markVolumeSeen(context)
                 cancelAbsentVolumeProbe()
 
