@@ -415,21 +415,9 @@ object CfmotoConnect {
         // silently is what the Rieju rider hit on 2026-08-20 18:51: he tapped connect, the BLE bridge was
         // skipped without a word, and he was handed a dialog telling him to do the OPPOSITE — copy the
         // dash's credentials into his own hotspot. Say it before showing it.
-        // A bike whose QR carries the BLE mechanism has exactly one way in, and Android Auto is not it:
-        // the factory has no AA hand-off, and the manual method behind this dialog asks the rider to type
-        // a network into a dash that has no keyboard. Warning him and then showing the dead end anyway is
-        // what happened on 2026-08-20 — four connects across two sessions, every one of them through
-        // Android Auto, so the Bluetooth bridge never even ran and none of the work could be tested.
-        // Refuse the dead end instead of dressing it up.
-        if (isBleHotspot(qr)) {
-            LogBus.log(
-                "→ this bike is given its network over Bluetooth, and Android Auto does not use that path — " +
-                    "refusing to start it. Connect with the map or the mirror.",
-            )
-            ConnectionState.set(Phase.ERROR, activity.getString(R.string.ovk_aa_needs_map_for_ble))
-            Toast.makeText(activity, R.string.ovk_aa_needs_map_for_ble, Toast.LENGTH_LONG).show()
-            return
-        }
+        // The BLE-bike refusal lives in [startAaConnect], before anything is started. Reaching here means
+        // this is a phone-hotspot bike WITHOUT the Bluetooth mechanism (Zontes and friends), for which the
+        // manual method below is the real one.
         LogBus.log(
             "→ phone-hotspot mode (action=${qr.action} mac=${qr.mac}) — " +
                 "assist dialog (app cannot create AP; set dash SSID/pwd in system hotspot)",
@@ -864,6 +852,19 @@ object CfmotoConnect {
      */
     fun startAaConnect(activity: Activity, qr: QrData) {
         try {
+            // Refuse BEFORE anything starts. Putting this check further down — inside the Wi-Fi join —
+            // left the AA receiver already running when the join said no, and something upstream kept
+            // retrying: on 2026-08-20 21:30 the phone looped "Starting Android Auto → refused" every three
+            // seconds. A guard that fires after the thing it is guarding has begun is not a guard.
+            if (isBleHotspot(qr)) {
+                LogBus.log(
+                    "→ this bike is given its network over Bluetooth, and Android Auto does not use that " +
+                        "path — not starting it. Connect with the map or the mirror.",
+                )
+                ConnectionState.set(Phase.ERROR, activity.getString(R.string.ovk_aa_needs_map_for_ble))
+                Toast.makeText(activity, R.string.ovk_aa_needs_map_for_ble, Toast.LENGTH_LONG).show()
+                return
+            }
             if (!WifiGate.ensureEnabledOrPrompt(activity)) return
             // AA Connect needs Nearby + Bluetooth so HUR (START_WIRELESS_PROJECTION) can run when
             // WirelessStartupActivity is a no-op (common on AA 16.4+/17.4+). Mirror/Map unchanged.
