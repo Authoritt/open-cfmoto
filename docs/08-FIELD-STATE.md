@@ -33,25 +33,53 @@ not the raw APK: RelayCore caps attachments at 15 MB (`OpcionesEnvio.MaxTamanoAd
 
 ## Thread 1 — the Rieju BLE bridge
 
-**Proven** by the 2026-08-19 log, end to end: BLE scan → GATT → MTU 256 → `0x30 CLIENT_INFO` →
-`0x50 REQUEST_BUILD_NET` → **the dash answers `{"status":2}`** (USE_PHONE_AP) → Wi-Fi Direct group
-created with Carbit's own credential shape (`Easyconn_AP-NNNN` + 12 chars, 5 GHz) → `0x52` delivered.
+The BLE conversation is **complete and correct**: scan → GATT → MTU 256 → `0x30` → `0x50` → the dash
+answers → group built → `0x52` credentials delivered → we poll `0x50` until it reports joining. The dash
+answers *every* poll, in ~200 ms, all session. What it never does is associate.
 
-**The blocker, and its fix (not yet tested on a bike).** We waited for the dash to volunteer a
-`0x51`/`0x53` and timed out after 20 s. It never volunteers: Carbit's own
-`SdpBluetoothUtil.processRequestBuildNet` is a `while (true)` that re-sends the build request every
-1-2 s and reads the `status` of each reply, finishing on `0` (SUCCEED). We now poll the same way
-(`BleApInfoPush.startNetPoll`, 2 s cadence, 30 s budget).
+**Ruled out by measurement, not argument** (2026-08-19 → 20, six field sessions):
 
-*What the next log must show:* repeated `status=2 — not joined yet`, then
-`status=0 (SUCCEED) — the dash JOINED the group`, then a client connecting from `192.168.49.X` where
-**X is not 1**.
+| Suspect | How it died |
+|---|---|
+| Our poll / protocol | The dash answers all 14 polls per session, parsed and logged |
+| The band | Both offered for real, frequencies confirmed by the framework: 5200/5240/5785 MHz and 2437/2462 MHz |
+| Peer discovery running during `createGroup` | Carbit's own missing step (`WifiDirectScanner.B{}` = `stopPeerDiscovery`), now done — same result |
+| Someone must authorise on the dash | The rider: with Carbit "es directo", nothing is touched on screen |
+| The dash dictates the credentials | No — Carbit reads them from its OWN hotspot (`getWifiHotspotSsid()`), and persists them for reuse |
 
-*If every poll stays at 2 until the timeout*, the dash accepts and asks for the network but cannot join
-it. Two suspects, in this order: the **band** (we request 5 GHz because Carbit does — one constant,
-`CarbitGroupConfig.BAND`), and the **SSID** (Android forces `DIRECT-xy-` in front of Carbit's raw
-`Easyconn_AP-NNNN`; Carbit escapes that by reflecting on the built `WifiP2pConfig`, which lint refuses
-at targetSdk 36 — a targetSdk conversation, not a `try/catch`).
+**Found and shipped, not yet exercised on the bike:**
+
+- **`CLIENT_INFO` was going out EMPTY** — five bytes, `24 30 04 10 0a` — for six sessions. Carbit's
+  carries a JSON body (`rm.b.preRequest()`): `phoneType`, `phoneID`, `phoneName`, `packageName` and
+  **`netInterface`**, every IPv4 the phone holds with its mask, filtering loopback and virtual/carrier
+  names by prefix. A dash about to be asked to join a network and dial back has every reason to want it.
+  Ours now sends the same shape, `packageName` matching `EasyConnProber.SPOOFED_PACKAGE`, logged verbatim.
+- **A plain access point as a second mechanism.** A Wi-Fi Direct group and a local-only hotspot look
+  nothing alike on the air — P2P group owner with WFD elements and a framework-forced `DIRECT-` SSID
+  versus an ordinary AP. Carbit has both (`createAP_p()` / `startLocalOnlyHotspot`, public API since 26),
+  which may be exactly why "en carbit es directo". Ours now falls through to it when Wi-Fi Direct is
+  refused on both bands. It ran once, on 20 Aug 20:23, and **our own code killed it**: the AP was up with
+  its SSID and passphrase and we discarded it because the interface had no address *yet*. Fixed — it now
+  waits up to 5 s and looks for the address by the interface names Android uses per OEM.
+
+**What blocked six sessions of testing, and is now impossible:** the rider kept connecting through
+**Android Auto**, which bypasses the bridge by design (`routesToBleHotspotConnector` requires
+`!gateOnAaSteady`) and dropped him into the legacy dialog that asks him to type a network into a dash
+with no keyboard. Warning him was not enough — it is refused now, at the top of `startAaConnect`, before
+anything starts.
+
+*One connect through the map or the mirror answers the open question:* does the dash join a plain access
+point? If it does, Wi-Fi Direct was the problem all along. If it does not, the last named difference is
+the SSID — Carbit plants the raw `Easyconn_AP-NNNN` by reflecting on the built `WifiP2pConfig`, which
+lint refuses at `targetSdk 36`, and that is a targetSdk conversation.
+
+**The feature this is waiting on:** routing Android Auto THROUGH the bridge. The whole mechanism already
+exists — `BikeLink.markP2pReady(bindIp, gatewayIp)` plus the `aaVideoSteady` gate — but it changes what
+the factory owns, so it was not improvised with a rider standing next to a bike.
+
+**The method lesson, learned twice in one day:** both omissions (`stopPeerDiscovery`, the empty
+`CLIENT_INFO`) were found by reading what the official app does *around* the part already copied. The
+payloads were right; the conversation was not.
 
 ## Thread 2 — the handlebar on the 450NK
 
