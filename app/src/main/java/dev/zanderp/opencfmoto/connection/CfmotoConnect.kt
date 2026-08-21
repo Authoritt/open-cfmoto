@@ -415,13 +415,20 @@ object CfmotoConnect {
         // silently is what the Rieju rider hit on 2026-08-20 18:51: he tapped connect, the BLE bridge was
         // skipped without a word, and he was handed a dialog telling him to do the OPPOSITE — copy the
         // dash's credentials into his own hotspot. Say it before showing it.
+        // A bike whose QR carries the BLE mechanism has exactly one way in, and Android Auto is not it:
+        // the factory has no AA hand-off, and the manual method behind this dialog asks the rider to type
+        // a network into a dash that has no keyboard. Warning him and then showing the dead end anyway is
+        // what happened on 2026-08-20 — four connects across two sessions, every one of them through
+        // Android Auto, so the Bluetooth bridge never even ran and none of the work could be tested.
+        // Refuse the dead end instead of dressing it up.
         if (isBleHotspot(qr)) {
             LogBus.log(
-                "→ this bike HAS the Bluetooth bridge, but Android Auto does not use it (no AA hand-off in the " +
-                    "factory) — falling back to the manual hotspot method. Connect with the map or the mirror " +
-                    "to get the automatic bridge.",
+                "→ this bike is given its network over Bluetooth, and Android Auto does not use that path — " +
+                    "refusing to start it. Connect with the map or the mirror.",
             )
-            Toast.makeText(activity, R.string.main_phone_hotspot_aa_no_bridge, Toast.LENGTH_LONG).show()
+            ConnectionState.set(Phase.ERROR, activity.getString(R.string.ovk_aa_needs_map_for_ble))
+            Toast.makeText(activity, R.string.ovk_aa_needs_map_for_ble, Toast.LENGTH_LONG).show()
+            return
         }
         LogBus.log(
             "→ phone-hotspot mode (action=${qr.action} mac=${qr.mac}) — " +
