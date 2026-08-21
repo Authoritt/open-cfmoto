@@ -48,6 +48,7 @@ import dev.zanderp.opencfmoto.connection.CfmotoConnect
 import dev.zanderp.opencfmoto.settings.SettingsStore
 import dev.zanderp.opencfmoto.ui.cockpit.CockpitScreen
 import dev.zanderp.opencfmoto.ui.controls.ControlsScreen
+import dev.zanderp.opencfmoto.ui.dash.DashViewScreen
 import dev.zanderp.opencfmoto.ui.dashboard.DashboardScreen
 import dev.zanderp.opencfmoto.ui.garage.GarageScreen
 import dev.zanderp.opencfmoto.ui.map.MapScreen
@@ -287,6 +288,8 @@ object Routes {
     const val SCAN = "scan"
     const val CONTROLS = "controls"
     const val MIRROR = "mirror"
+    /** Live Android Auto video on the phone — what AA is REALLY painting on the bike dash. */
+    const val DASH_VIEW = "dash_view"
     const val MAP = "map"
     const val COCKPIT = "cockpit"
     const val SCREEN_MARGINS = "screen_margins"
@@ -311,6 +314,7 @@ fun CockpitApp(startRoute: String? = null, startDestination: String = Routes.DAS
         composable(Routes.SCAN) { ScanScreen(nav) }
         composable(Routes.CONTROLS) { ControlsScreen(nav) }
         composable(Routes.MIRROR) { MirrorScreen(nav) }
+        composable(Routes.DASH_VIEW) { DashViewScreen(nav) }
         composable(Routes.MAP) { MapScreen(nav) }
         composable(Routes.COCKPIT) { CockpitScreen(nav) }
         composable(Routes.SCREEN_MARGINS) { ScreenMarginsScreen(nav) }

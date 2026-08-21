@@ -29,8 +29,11 @@ import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
+import dev.overtake.maps.contract.SearchIntent
 import dev.overtake.maps.search.NominatimSearch
 import dev.zanderp.opencfmoto.connection.CfmotoConnect
+import dev.zanderp.opencfmoto.connection.factory.AutoConnectGate
+import dev.zanderp.opencfmoto.connection.factory.autoConnectGateFor
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -420,7 +423,11 @@ class MainActivity : AppCompatActivity() {
             private val run = Runnable {
                 val q = destField.text?.toString()?.trim().orEmpty()
                 // Live suggestions only while OUR map is on the bike — not while Android Auto is live.
-                if (q.length >= 2 && GpxSession.active && DashRemote.isAvailable) DashRemote.submit(q)
+                // Live suggestions = the rider is TYPING: the dash must stay on the autocomplete-legal
+                // providers (see DashRemote.submit / SearchIntent).
+                if (q.length >= 2 && GpxSession.active && DashRemote.isAvailable) {
+                    DashRemote.submit(q, typeahead = true)
+                }
             }
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -507,8 +514,16 @@ class MainActivity : AppCompatActivity() {
         val explicit = intent?.getBooleanExtra(AndroidAutoService.EXTRA_RESUME, false) == true
         if (!explicit && !AndroidAutoService.isParked && ConnectionState.phase != Phase.WAITING_FOR_BIKE) return
         val saved = BikeMemory.lastQr(this) ?: return
-        // On a plain open (not an explicit tap), only resume when the bike doesn't look clearly absent.
-        if (!explicit && BikeWifi.isSsidInRange(this, saved.ssid) == false) return
+        // On a plain open (not an explicit tap), only resume when the bike doesn't look clearly absent —
+        // and only for the connectors that CAN look absent. For a phone-hosted bike there is no bike SSID to
+        // scan for (the phone creates the network), so this question always answered "absent" and a parked
+        // session could never be resumed by simply reopening the app (see autoConnectGateFor).
+        if (!explicit &&
+            autoConnectGateFor(BikeMemory.effectiveMode(this, saved)) == AutoConnectGate.BIKE_SSID_IN_RANGE &&
+            BikeWifi.isSsidInRange(this, saved.ssid) == false
+        ) {
+            return
+        }
         intent?.removeExtra(AndroidAutoService.EXTRA_RESUME)
         log("→ Resuming projection to '${BikeMemory.lastBikeName(this)}' from the foreground")
         autoConnectStarted = true
@@ -548,7 +563,17 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val inRange = BikeWifi.isSsidInRange(this, saved.ssid)
+        // "Is the bike near?" — only for the connectors that can answer it. The two phone-hosts-the-network
+        // connectors have no bike SSID to scan for, so this gate could never pass and those bikes never
+        // auto-connected; this method already fires at most once per process (autoConnectStarted), which is
+        // exactly the ONCE_PER_SESSION budget those connectors get. The tether connector needs the rider to
+        // switch the hotspot on, so it stays Connect-only.
+        val gate = autoConnectGateFor(BikeMemory.effectiveMode(this, saved))
+        if (gate == AutoConnectGate.RIDER_ONLY) {
+            logAutoConnectSkipOnce("'${BikeMemory.lastBikeName(this)}' needs you to turn the phone hotspot on — tap Connect")
+            return
+        }
+        val inRange = if (gate == AutoConnectGate.BIKE_SSID_IN_RANGE) BikeWifi.isSsidInRange(this, saved.ssid) else null
         if (inRange == false) {
             logAutoConnectSkipOnce("'${BikeMemory.lastBikeName(this)}' not in range — will retry when its Wi-Fi appears")
             return
@@ -558,7 +583,11 @@ class MainActivity : AppCompatActivity() {
         // later onResume doesn't fire a second attempt. Use the main looper (not the view) so a
         // dependency dialog can't cancel the delayed start with the view.
         autoConnectStarted = true
-        val why = if (inRange == true) "Wi-Fi in range" else "range unknown — trying anyway"
+        val why = when {
+            inRange == true -> "Wi-Fi in range"
+            gate == AutoConnectGate.ONCE_PER_SESSION -> "this bike's network is created by the phone — one attempt"
+            else -> "range unknown — trying anyway"
+        }
         log("→ Auto-connect: '${BikeMemory.lastBikeName(this)}' ($why). Disable in Setup ▸ Startup.")
         ProjectionHolder.projection = null   // bike uses the AA pipeline, not mirror
         ensureLocationPermission()
@@ -897,10 +926,12 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, getString(R.string.main_sent_aa, dest), Toast.LENGTH_SHORT).show()
         log("[search] AA: looking up \"$dest\"…")
         val near = lastKnownLatLon()
+        // SUBMIT: one deliberate action (the rider sent a destination to Android Auto).
         NominatimSearch.searchAsync(
             query = dest,
             nearLat = near?.first,
             nearLon = near?.second,
+            intent = SearchIntent.SUBMIT,
             onResult = { places ->
                 runOnUiThread {
                     val best = places.firstOrNull()
@@ -946,6 +977,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopEverything() {
+        // Clear a live factory connection first (no-op when the dev toggle is OFF); classic teardown below is
+        // unchanged. MainActivity ("Original mode") can also start a factory connect via joinWifi (design §4).
+        dev.zanderp.opencfmoto.connection.BikeConnectionHolder.disconnectAndClear()
         log("→ stopping everything (Android Auto + bike)")
         try { AaVideoBridge.onSteadyVideo = null } catch (_: Exception) {}
         try { AndroidAutoService.stop(this) } catch (e: Exception) { log("AA stop: $e") }

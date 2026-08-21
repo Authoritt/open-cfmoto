@@ -4,9 +4,6 @@
 // mode (CFMOTO → the built-in map; Android Auto → the classic hub). No mode switch clutters the dash.
 package dev.zanderp.opencfmoto.ui.dashboard
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,7 +44,6 @@ import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.AppSettings
 import dev.zanderp.opencfmoto.BikeMemory
-import dev.zanderp.opencfmoto.ConnectionState
 import dev.zanderp.opencfmoto.ControlsActivity
 import dev.zanderp.opencfmoto.GpxSession
 import dev.zanderp.opencfmoto.connection.CfmotoConnect
@@ -65,17 +61,14 @@ import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.components.PrimaryButton
 import dev.zanderp.opencfmoto.ui.components.StatusKind
 import dev.zanderp.opencfmoto.ui.components.Tile
-import dev.zanderp.opencfmoto.ui.components.kind
+import dev.zanderp.opencfmoto.ui.components.RadioNeed
+import dev.zanderp.opencfmoto.ui.components.RadioNeededDialog
+import dev.zanderp.opencfmoto.ui.connection.enableRadio
+import dev.zanderp.opencfmoto.ui.connection.ensureConnectorReady
+import dev.zanderp.opencfmoto.ui.connection.findActivity
+import dev.zanderp.opencfmoto.ui.connection.rememberConnectionStatus
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
 import kotlinx.coroutines.launch
-
-// LocalContext inside CockpitActivity's setContent is the Activity today, but unwrap defensively so a
-// future ContextThemeWrapper / @Preview / ComposeView host can't crash Conectar with a hard cast.
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
 
 @Composable
 fun DashboardScreen(nav: NavController) {
@@ -83,16 +76,21 @@ fun DashboardScreen(nav: NavController) {
     val ctx = LocalContext.current
     val store = remember { SettingsStore(ctx.applicationContext) }
     val scope = rememberCoroutineScope()
-    val snap by ConnectionState.flow.collectAsStateWithLifecycle()
+    // ONE reading of the connection for the whole cockpit (ui/connection/ConnectionStatus.kt): the gauge
+    // here and Scan's Conectar narrate the same connect, so the rules live in one place instead of being
+    // copied into every screen that shows them — that is how two screens end up disagreeing on air.
+    val status = rememberConnectionStatus()
+    val kind = status.kind
+    val statusText = status.text
     val autoOn by store.autoConnect.collectAsStateWithLifecycle(initialValue = false)
     val prompted by store.autoConnectPrompted.collectAsStateWithLifecycle(initialValue = false)
     val provider by store.mapProvider.collectAsStateWithLifecycle(initialValue = MapProvider.BUILTIN)
-    val kind = snap.phase.kind()
-    val statusText = stringResource(snap.phase.labelRes)
     val bikeName = remember { BikeMemory.lastBikeName(ctx) ?: ctx.getString(R.string.ovk_no_bike_paired) }
     val hasBike = remember { BikeMemory.lastQr(ctx) != null }
 
     var showMode by remember { mutableStateOf(false) }
+    // A radio the bike needs is OFF: explain it in our own words before the platform's prompt.
+    var radioNeeded by remember { mutableStateOf<RadioNeed?>(null) }
     var showConsent by remember { mutableStateOf(false) }
 
     // Foreground fallback: when the cockpit resumes and the bike is in range, auto-connect the built-in
@@ -120,9 +118,20 @@ fun DashboardScreen(nav: NavController) {
         // the cockpit (which already reflects ConnectionState.flow) — the classic MainActivity UI never
         // shows. prepareFreeRide arms the session; CfmotoConnect.startCfmotoMap runs the proven connect
         // path (join bike Wi-Fi + project own content, no Android Auto). Fixes "Conectar opens the map menu".
+        // preferFactory = true: the cockpit owns its SoftAP/P2P connection via the connection factory
+        // (reconnect + teardown parity), never the global dev toggle (removed). Own-map auto-connect uses the
+        // factory too; only mirror/espejo and the Android-Auto path stay classic.
         GpxSession.prepareFreeRide()
         val activity = ctx.findActivity() ?: return
-        CfmotoConnect.startCfmotoMap(activity)
+        // Ask for whatever this bike's connector needs BEFORE connecting. Asking only at pairing was a
+        // real, reported failure: the Rieju owner's bike is already paired, so he connects from HERE and
+        // the pairing screen never runs — his log showed the BLE scan dying on
+        // "SecurityException: Need BLUETOOTH_SCAN" with no permission prompt anywhere in sight. A connect
+        // entry point that can't ask is a connect entry point that fails silently, so every one of them
+        // asks now. Returns false when it had to prompt: the grant lands asynchronously and the rider taps
+        // Conectar again, which is the same pattern the location gate already uses.
+        if (!ensureConnectorReady(activity, BikeMemory.lastQr(ctx)) { radioNeeded = it }) return
+        CfmotoConnect.startCfmotoMap(activity, preferFactory = true)
     }
     fun afterMode(mode: String) {
         if (!prompted) showConsent = true else execute(mode)
@@ -208,6 +217,17 @@ fun DashboardScreen(nav: NavController) {
             onDismiss = { showMode = false },
         )
     }
+    radioNeeded?.let { need ->
+        RadioNeededDialog(
+            need = need,
+            onEnable = {
+                radioNeeded = null
+                ctx.findActivity()?.let { enableRadio(it, need) }
+            },
+            onDismiss = { radioNeeded = null },
+        )
+    }
+
     if (showConsent) {
         AutoConnectDialog(
             onAllow = {

@@ -24,6 +24,8 @@ object ButtonPresencePrefs {
     private const val PREF = "button_presence"
     private const val KEY_VOLUME = "volume_rocker"
     private const val KEY_TRACK = "track_keys"
+    private const val KEY_TRACK_FWD = "track_fwd"
+    private const val KEY_TRACK_BACK = "track_back"
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
@@ -49,6 +51,24 @@ object ButtonPresencePrefs {
             LogBus.log("[BTN] volume rocker marked PRESENT (event seen)")
         }
     }
+
+    /**
+     * Record that a real ◀ or ▶ media key arrived. Both directions present means this pod can steer the
+     * dash on its own, and the ▲/▼ rocker is not needed for it — which matters because the rocker is
+     * this bike's VOLUME protocol: every press makes the dash pop its volume box and forces us to put
+     * the level back. Pods without a second direction still need it.
+     */
+    fun markTrackDirection(ctx: Context, forward: Boolean) {
+        val key = if (forward) KEY_TRACK_FWD else KEY_TRACK_BACK
+        if (BikeScope.getBoolean(prefs(ctx), ctx, key, false)) return
+        BikeScope.putBoolean(prefs(ctx), ctx, key, true)
+        LogBus.log("[BTN] this handlebar has a real ${if (forward) "▶" else "◀"} key")
+    }
+
+    /** True when the pod proved BOTH directions with its own keys — no rocker needed to navigate. */
+    fun hasBothTrackDirections(ctx: Context): Boolean =
+        BikeScope.getBoolean(prefs(ctx), ctx, KEY_TRACK_FWD, false) &&
+            BikeScope.getBoolean(prefs(ctx), ctx, KEY_TRACK_BACK, false)
 
     /** Call when ◀/▶ / Select media keys are observed. */
     fun markTrackSeen(ctx: Context) {

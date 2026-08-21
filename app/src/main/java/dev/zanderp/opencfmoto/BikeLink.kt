@@ -98,6 +98,18 @@ object BikeLink {
      */
     @Synchronized
     fun onWifiReacquired(network: Network?) {
+        // A factory connection owns its own reconnect. Drive it via the holder (single path, review M4) and DO
+        // NOT touch the classic prober below (prevents the double-prober race). This runs on BikeWifi's
+        // ConnectivityThread (NOT the main looper). Inert when no factory connection is live → the classic path
+        // runs byte-for-byte. Single convergence point for ALL classic re-establish (real re-acquire + socket
+        // recovery), so forking here covers both (flip-work-design.md §2).
+        // The holder itself decides whether it can take it: a driver that already ended in a terminal Error
+        // has no receiver for the event, so it hands the re-acquire BACK to the classic prober below instead
+        // of swallowing it (that driver is dead — an initial-connect failure ends it on the first attempt).
+        if (dev.zanderp.opencfmoto.connection.BikeConnectionHolder.onWifiReacquired(network)) {
+            LogBus.log("→ Wi-Fi re-acquired → factory connection re-establish (classic prober untouched)")
+            return
+        }
         // If the service parked Android Auto (long outage → torn down to save battery), it must rebuild
         // AA before the bike link is useful — hand off to the service instead of restarting the prober
         // against a dead (stopped) pipeline.

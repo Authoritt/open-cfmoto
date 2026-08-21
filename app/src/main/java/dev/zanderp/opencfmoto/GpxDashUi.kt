@@ -40,9 +40,12 @@ import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
 import dev.overtake.maps.RendererKind
 import dev.overtake.maps.contract.MapRenderer
+import dev.overtake.maps.contract.SearchIntent
 import dev.overtake.maps.search.NominatimSearch
 import dev.overtake.maps.route.offline.OfflinePoiIndex
 import dev.zanderp.opencfmoto.aa.AaInput
+import dev.zanderp.opencfmoto.cockpit.NowPlaying
+import dev.zanderp.opencfmoto.cockpit.NowPlayingState
 import dev.zanderp.opencfmoto.settings.DashRenderer
 import dev.zanderp.opencfmoto.settings.SettingsStore
 import dev.zanderp.opencfmoto.ui.CockpitActivity
@@ -85,6 +88,9 @@ class GpxDashUi(
     private var sensorManager: SensorManager? = null
     private var compassListener: SensorEventListener? = null
     private var released = false
+    /** True once this (projected) dash took a NowPlaying observation, so release() balances it exactly
+     *  once — a bind() that returned early (before start) must not decrement another surface's refcount. */
+    private var nowPlayingBound = false
 
     /**
      * The renderer for THIS dash. BOTH the projected bike dash AND the phone preview now honor the
@@ -1118,7 +1124,14 @@ class GpxDashUi(
                 if (searchInput.text.isNullOrBlank()) showIdle()
             }
         }
-        fun runDashSearch(query: String) {
+        /**
+         * @param typeahead true when this runs from TYPING (the dash's own debounced suggestions, or
+         *   the phone bridge while the rider types on the phone) — then only autocomplete-legal
+         *   providers run. False = the rider explicitly asked (Go button, keyboard search key, a
+         *   destination sent from the phone). See [dev.overtake.maps.contract.SearchIntent]:
+         *   Nominatim's usage policy forbids client-side autocomplete against it.
+         */
+        fun runDashSearch(query: String, typeahead: Boolean = false) {
             val q = query.trim()
             if (q.isEmpty()) {
                 showIdle()
@@ -1133,6 +1146,7 @@ class GpxDashUi(
             val offline = OfflinePoiIndex.search(context, q, nearLat, nearLon)
             NominatimSearch.searchAsync(
                 q, nearLat, nearLon,
+                intent = if (typeahead) SearchIntent.TYPEAHEAD else SearchIntent.SUBMIT,
                 onResult = { list -> main.post {
                     if (!isAlive() || released) return@post
                     showSearchResults(if (list.isNotEmpty()) list else offline)
@@ -1437,7 +1451,7 @@ class GpxDashUi(
         root.findViewById<View>(R.id.gpx_search_close).setOnClickListener { hideSheets() }
         dimmer.setOnClickListener { hideSheets() }
         // Phone → dash search bridge: the phone keyboard types into this (projected) search.
-        DashRemote.setHandler { q ->
+        if (projected) DashRemote.setHandler { q, typeahead ->
             main.post {
                 if (!isAlive() || released) return@post
                 menuPanel.visibility = View.GONE
@@ -1447,12 +1461,12 @@ class GpxDashUi(
                 searchPanel.bringToFront()
                 searchInput.setText(q)
                 searchInput.setSelection(q.length)
-                runDashSearch(q)
+                runDashSearch(q, typeahead)
             }
         }
         // Phone/cockpit → dash navigate bridge: re-target the LIVE (already-projected) dash to a
         // destination — route + turn-by-turn — with NO PXC reconnect. Same path as the "Go" button.
-        DashRemote.setNavHandler { place ->
+        if (projected) DashRemote.setNavHandler { place ->
             main.post {
                 if (!isAlive() || released) return@post
                 startNavigationTo(place)
@@ -1460,7 +1474,7 @@ class GpxDashUi(
         }
         // Phone/cockpit → dash theme bridge: the on-map day/night/auto toggle flips the LIVE dash in
         // place (no PXC reconnect). The phone already wrote NightPrefs; applyMapTheme re-reads it.
-        DashRemote.setThemeHandler {
+        if (projected) DashRemote.setThemeHandler {
             main.post {
                 if (!isAlive() || released) return@post
                 applyMapTheme()
@@ -1478,7 +1492,7 @@ class GpxDashUi(
             if (!isAlive() || released) return@Runnable
             if (searchPanel.visibility != View.VISIBLE) return@Runnable
             val q = searchInput.text?.toString()?.trim().orEmpty()
-            if (q.length >= 2) runDashSearch(q)
+            if (q.length >= 2) runDashSearch(q, typeahead = true)
         }
         searchInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -1614,12 +1628,28 @@ class GpxDashUi(
             }
             // Manual stop ≠ arrival — never flash "Arrived at …" / parking sheet.
             finishToFreeRideUi("Navigation finished", offerParking = false)
+            // This same class runs TWICE: once here on the phone and once projected to the bike, each
+            // with its own snapshot of the route. Ending it on the phone used to clear only the phone's
+            // copy, so the dash kept showing (and speaking) a route the rider had just cancelled. The
+            // projected instance owns the DashRemote channel, so tell it through the same door the
+            // cockpit uses. No-op when THIS is the projected one — it just did the work.
+            if (!projected) runCatching { DashRemote.endNavigation() }
             refreshChrome()
             hideSheets()
             onChromeFocus?.invoke("default")
         }
         root.findViewById<Button>(R.id.gpx_end).setOnClickListener { endRouteNow() }
         root.findViewById<Button>(R.id.gpx_end_bar).setOnClickListener { endRouteNow() }
+        // Phone/cockpit → dash END bridge: the rider ends the ride on the phone → clear the route,
+        // stop turn-by-turn voice, and drop to free ride on the LIVE (already-projected) dash — with
+        // NO PXC reconnect. Without this the bike dash kept the stale route AND kept speaking guidance
+        // (the phone only updated GpxSession; the dash never learned the trip ended).
+        if (projected) DashRemote.setEndHandler {
+            main.post {
+                if (!isAlive() || released) return@post
+                endRouteNow()
+            }
+        }
         root.findViewById<Button>(R.id.gpx_park).setOnClickListener {
             val loc = lastLoc
             if (loc == null) {
@@ -2198,6 +2228,59 @@ class GpxDashUi(
             }
             main.post { ensureFocus(defaultPrefer()) }
             log("[GPX] handlebar focus nav armed (ButtonMap → Map)")
+
+            // ── Panel mode: now-playing strip (the map + music "split" on the bike dash) ──────────
+            // The phone's Mapa|Panel toggle (CockpitScreen) flips this over DashRemote; the strip reads
+            // the phone's active media session through the process-global NowPlaying observer, so it
+            // keeps updating while the rider is pocketed. Read-only (title/artist/play-state) — the
+            // transport controls stay on the phone panel. Map mode hides it, so the classic map path is
+            // untouched. Placed above the map in the layout, so nav chrome draws over it while riding.
+            val musicStrip = root.findViewById<View>(R.id.gpx_music_strip)
+            val musicArt = root.findViewById<ImageView>(R.id.gpx_music_art)
+            val musicTitle = root.findViewById<TextView>(R.id.gpx_music_title)
+            val musicArtist = root.findViewById<TextView>(R.id.gpx_music_artist)
+            val musicState = root.findViewById<TextView>(R.id.gpx_music_state)
+            var panelOn = DashRemote.panelMode
+            var nowState: NowPlayingState? = null
+            fun renderMusicStrip() {
+                if (released || !isAlive()) return
+                musicStrip.visibility = if (panelOn) View.VISIBLE else View.GONE
+                if (!panelOn) return
+                val s = nowState
+                if (s == null || !s.hasSession) {
+                    musicTitle.text = context.getString(R.string.ovk_music_none)
+                    musicArtist.visibility = View.GONE
+                    musicState.text = ""
+                    musicArt.setImageDrawable(null)
+                } else {
+                    musicTitle.text = s.title.ifBlank { "—" }
+                    musicArtist.text = s.artist
+                    musicArtist.visibility = if (s.artist.isBlank()) View.GONE else View.VISIBLE
+                    musicState.text = if (s.playing) "▶" else "❚❚"
+                    if (s.art != null) musicArt.setImageBitmap(s.art) else musicArt.setImageDrawable(null)
+                }
+            }
+            // Observe the phone's media session for as long as this dash projects (refcounted in
+            // NowPlaying, so it coexists with the cockpit's own MusicPanel).
+            NowPlaying.start(context)
+            nowPlayingBound = true
+            routeScope.launch {
+                NowPlaying.state.collect { st ->
+                    nowState = st
+                    renderMusicStrip()
+                }
+            }
+            if (projected) DashRemote.setPanelHandler { on ->
+                main.post {
+                    if (released || !isAlive()) return@post
+                    panelOn = on
+                    renderMusicStrip()
+                }
+            }
+            renderMusicStrip()
+            // Diagnostic for the on-bike panel test: did the strip start visible, and is there actually a
+            // media session to render? ("no music playing" would explain an empty strip even when panelOn.)
+            log("[MAP] panel strip: panelMode=$panelOn nowPlaying=${NowPlaying.state.value.hasSession}")
         }
 
         log(
@@ -2830,10 +2913,24 @@ class GpxDashUi(
         if (released) return
         released = true
         routeScope.cancel()
-        MapInputBridge.clear()
-        DashRemote.setHandler(null)
-        DashRemote.setNavHandler(null)
-        DashRemote.setThemeHandler(null)
+        // Only the PROJECTED dash owns the handlebar sinks (it sets them in bind()'s `if (projected)`
+        // block). The phone-preview instance (projected=false) never sets them, so it must NOT clear
+        // them here — doing so silently kills handlebar input on the live bike dash when the preview
+        // is closed. See MapInputBridge / bind().
+        if (projected) {
+            MapInputBridge.clear()
+            // Balance the NowPlaying refcount taken in bind()'s projected block — only if we actually
+            // took one (an early-returning bind never called start()).
+            if (nowPlayingBound) {
+                nowPlayingBound = false
+                NowPlaying.stop(context)
+            }
+        }
+        if (projected) DashRemote.setHandler(null)
+        if (projected) DashRemote.setNavHandler(null)
+        if (projected) DashRemote.setThemeHandler(null)
+        if (projected) DashRemote.setEndHandler(null)
+        if (projected) DashRemote.setPanelHandler(null)
         main.removeCallbacksAndMessages(null)
         locationListener?.let { listener ->
             try { locationManager?.removeUpdates(listener) } catch (_: Exception) {}

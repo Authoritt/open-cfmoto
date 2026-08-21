@@ -27,6 +27,7 @@ import dev.zanderp.opencfmoto.BikeWifiP2p
 import dev.zanderp.opencfmoto.CrashGuard
 import dev.zanderp.opencfmoto.DashClockBle
 import dev.zanderp.opencfmoto.DashMemory
+import dev.zanderp.opencfmoto.DashRemote
 import dev.zanderp.opencfmoto.EasyConnDiscovery
 import dev.zanderp.opencfmoto.EasyConnProber
 import dev.zanderp.opencfmoto.GpxSession
@@ -45,6 +46,14 @@ import dev.zanderp.opencfmoto.VideoPrefs
 import dev.zanderp.opencfmoto.WifiGate
 import dev.zanderp.opencfmoto.WifiTransport
 import dev.zanderp.opencfmoto.ConnectionState
+import dev.zanderp.opencfmoto.connection.factory.AutoConnectGate
+import dev.zanderp.opencfmoto.connection.factory.BikeConnectionFactory
+import dev.zanderp.opencfmoto.connection.factory.ConnectorChoice
+import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
+import dev.zanderp.opencfmoto.connection.factory.TransportKind
+import dev.zanderp.opencfmoto.connection.factory.autoConnectGateFor
+import dev.zanderp.opencfmoto.connection.factory.isBleHotspotQr
+import dev.zanderp.opencfmoto.connection.factory.resolveWifiTransport
 
 /**
  * App-scoped owner of the CFMOTO connect + project trigger (bike Wi‑Fi join, PXC prober start,
@@ -65,6 +74,45 @@ import dev.zanderp.opencfmoto.ConnectionState
  *    process-global [BikeLink.prober] and creates + assigns it if absent, mirroring MainActivity.onCreate.
  */
 object CfmotoConnect {
+
+    // The 450NK SoftAP/P2P factory route is now a PER-CALLER choice: [joinWifi]'s `preferFactory` flag
+    // (replaces the old runtime dev toggle / compile-time const). Default false = classic path byte-for-byte
+    // (the legacy MainActivity, mirror/espejo and Android-Auto call sites); every OWN-MAP connect — the
+    // cockpit Conectar AND foreground/background auto-connect — passes `preferFactory = true` so it
+    // routes SoftAP/P2P through [BikeConnectionFactory] WITH reconnect + teardown parity
+    // (handle retained in [BikeConnectionHolder]; the `BikeLink.onWifiReacquired` fork drives re-establish;
+    // FINITE retry caps for every connector, so a hopeless connect fails visibly instead of retrying in
+    // silence), scoped to the non-Android-Auto path. See `flip-work-design.md`. The Rieju phone-hotspot
+    // route ([routesToBleHotspotConnector] below) goes through the factory INDEPENDENT of `preferFactory`
+    // but NOT on the Android-Auto path; the OTHER phone-hotspot bikes (Zontes / opaque CARBIT tether)
+    // follow `preferFactory` like SoftAP/P2P — factory `TetherTransport` for the new cockpit, classic
+    // [joinPhoneHotspot] for the legacy/AA callers.
+
+    /**
+     * A phone-hosts-hotspot QR for a model that needs the factory's `PhoneHotspotTransport` (P2P group-owner +
+     * BLE B360 `0x52`) rather than the rider's-Android-hotspot tether. **Delegates to the single definition**
+     * [isBleHotspotQr] (next to `ConnectionSpec`), which `ConnectionSpec.fromQr` also uses to choose between
+     * `PHONE_HOTSPOT` and `TETHER` — one rule, so the routing decision here and the persisted `spec.mode` can
+     * never drift apart (they were two copies until the TETHER connector landed). Kept as a named `internal`
+     * member because it IS this object's routing decision and `CfmotoConnectRoutingTest` guards it here.
+     */
+    internal fun isBleHotspot(qr: QrData): Boolean = isBleHotspotQr(qr)
+
+    /**
+     * Does [joinWifi] send this QR to the factory's Rieju BLE `PhoneHotspotTransport`?
+     *
+     * [isBleHotspot] alone is NOT the answer: the branch must also be OFF the Android-Auto path. It used to
+     * sit ABOVE every `preferFactory`/`gateOnAaSteady` guard, so `startAaConnect` (which calls
+     * `gateOnAaSteady = true`) routed a Rieju QR into the factory and thereby SKIPPED the classic
+     * `joinPhoneHotspot(..., gateOnAaSteady = true)` → `BikeLink.markP2pReady(...)` deferral — the prober
+     * then raced AA video instead of waiting for it. The factory implements no AA hand-off, so AA falls
+     * through to the classic tether flow exactly like the [TransportKind.TETHER] branch already does.
+     *
+     * Kept as a named `internal` member (like [isBleHotspot]) because it IS the routing decision, and
+     * `CfmotoConnectRoutingTest` guards it here without needing Android.
+     */
+    internal fun routesToBleHotspotConnector(qr: QrData, gateOnAaSteady: Boolean): Boolean =
+        !gateOnAaSteady && isBleHotspot(qr)
 
     /**
      * The process-global bike PXC client. Reuse [BikeLink.prober] if it already exists (e.g. the AA
@@ -138,6 +186,10 @@ object CfmotoConnect {
         clearMirror: Boolean,
         localProber: EasyConnProber? = null,
     ) {
+        // Clear any live factory connection first (no-op when the toggle is OFF). NB: its disconnect() closes
+        // the transport → BikeWifi.leave(), so a mode-switch FROM a factory connection re-joins Wi-Fi (design
+        // §2 secondary risk); classic tear-down keeps Wi-Fi. Acceptable for the owner-only A/B toggle.
+        BikeConnectionHolder.disconnectAndClear()
         LogBus.log("→ mode switch: stop previous projection (keep Wi‑Fi)")
         try { AaVideoBridge.onSteadyVideo = null } catch (_: Exception) {}
         AaVideoBridge.pipeline = null
@@ -172,42 +224,123 @@ object CfmotoConnect {
      *
      * Uses applicationContext + the process-global prober (not this activity) so the hand-off
      * completes even if the activity is destroyed/recreated after it was armed.
+     *
+     * [preferFactory] (off the Android-Auto path only) routes a SoftAP/P2P join through the connection
+     * factory instead of the classic path — the cockpit's own connection opts in; every legacy/auto/mirror
+     * call keeps the default false and runs the classic path byte-for-byte. Ignored when [gateOnAaSteady]
+     * is true (AA never uses the factory) and for the Rieju phone-hotspot route (factory-only regardless).
      */
-    fun joinWifi(context: Context, qr: QrData, gateOnAaSteady: Boolean, activity: Activity? = null) {
+    fun joinWifi(
+        context: Context,
+        qr: QrData,
+        gateOnAaSteady: Boolean,
+        activity: Activity? = null,
+        preferFactory: Boolean = false,
+    ) {
         // Wi‑Fi must be on. Foreground (activity present) shows a modal; the background service path
         // (activity == null) posts a notification instead — the ONE genuine Activity dependency here.
         val wifiReady = if (activity != null) WifiGate.ensureEnabledOrPrompt(activity)
         else WifiGate.ensureEnabledOrNotify(context)
         if (!wifiReady) return
         ConnectionState.set(Phase.JOINING_WIFI)
+        // Per-bike rider OVERRIDE (Garage/Scan). Only consulted on the SAME factory-eligible path as the
+        // preferFactory route below (non-AA, own-map connect); on the legacy (preferFactory=false) and AA
+        // (gateOnAaSteady=true) paths `choice` is AUTO by construction, so those fall straight through to the
+        // existing routing byte-for-byte. AUTO here also falls through unchanged — an explicit choice short-
+        // circuits: all four connectors (spec.mode already forced by setConnectorChoice) go through
+        // BikeConnectionFactory.
+        val choice = if (!gateOnAaSteady && preferFactory) BikeMemory.connectorChoice(context, qr) else ConnectorChoice.AUTO
+        when (choice) {
+            ConnectorChoice.SOFT_AP, ConnectorChoice.P2P, ConnectorChoice.BLE, ConnectorChoice.HOTSPOT -> {
+                // Both phone-hosts-the-network connectors need an Activity (BLE handoff / assist dialog +
+                // system tethering settings) — refuse headless with the SAME state + message the AUTO
+                // branches below set, so a background auto-connect on a pinned bike is explainable instead
+                // of dying inside the driver's foreground gate with no rider-visible reason.
+                if (activity == null &&
+                    (choice == ConnectorChoice.BLE || choice == ConnectorChoice.HOTSPOT)
+                ) {
+                    LogBus.log("→ pinned '$choice' phone-hotspot bike can't auto-connect in the background — open the app to connect")
+                    ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
+                    return
+                }
+                LogBus.log("→ [FACTORY] joinWifi: rider-pinned '$choice' for '${qr.ssid}' → factory (spec.mode forced)")
+                val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
+                BikeConnectionHolder.set(conn)
+                conn.connect()
+                return
+            }
+            ConnectorChoice.AUTO -> { /* fall through to the existing auto logic, UNCHANGED */ }
+        }
         val transport = AppSettings.transport(context)
-        // Phone-hosts-hotspot (Zontes action=128 / no SoftAP pwd): dash joins the phone.
+        // Phone-hosts-hotspot (Carbit action=128 / no SoftAP pwd): dash joins the phone.
         if (qr.supportsPhoneHotspot && qr.pwd.isEmpty()) {
+            // A BLE-capable phone-hotspot QR (Rieju/Carbit action=128 carrying a bm= mac) goes through the
+            // NEW PhoneHotspotTransport (P2P group-owner + BLE B360 0x52 credential push, with a readable-
+            // creds manual fallback on BLE failure). INDEPENDENT of `preferFactory` — that flag gates ONLY the
+            // 450NK SoftAP/P2P classic path below, which stays byte-for-byte unchanged when it is OFF — but
+            // NOT of `gateOnAaSteady`: the factory implements no AA hand-off, so an Android-Auto connect must
+            // fall through to classic joinPhoneHotspot (which defers the probe via BikeLink.markP2pReady until
+            // AA video is steady). See [routesToBleHotspotConnector].
+            if (routesToBleHotspotConnector(qr, gateOnAaSteady)) {
+                if (activity == null) {
+                    // Background can't create the P2P group or show the assist — mirror joinPhoneHotspot's guard.
+                    LogBus.log("→ BLE phone-hotspot bike can't auto-connect in the background — open the app to connect")
+                    ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
+                    return
+                }
+                LogBus.log("→ [FACTORY] BLE phone-hotspot '${qr.ssid}' mac=${qr.mac} → PhoneHotspotTransport (independent of the dev toggle)")
+                val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
+                BikeConnectionHolder.set(conn) // single source of truth for "a factory connection is live" (design §1)
+                conn.connect()
+                return
+            }
+            // Phone-hotspot WITHOUT the Rieju BLE mechanism (Zontes / opaque CARBIT): the tether bikes.
+            // The NEW cockpit (preferFactory, non-AA) runs them through the factory's TetherTransport —
+            // a faithful wrap of joinPhoneHotspot/startPhoneHotspotScan with the driver's retry/teardown
+            // parity. The legacy MainActivity and the Android-Auto path keep the classic call below,
+            // byte-for-byte. Background is refused exactly as joinPhoneHotspot does (the assist dialog and
+            // the system tethering settings need an Activity).
+            if (!gateOnAaSteady && preferFactory) {
+                if (activity == null) {
+                    LogBus.log("→ phone-hotspot bike can't auto-connect in the background — open the app to connect")
+                    ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
+                    return
+                }
+                LogBus.log("→ [FACTORY] tether phone-hotspot '${qr.ssid}' (action=${qr.action}) → TetherTransport (preferFactory; non-AA path)")
+                val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
+                BikeConnectionHolder.set(conn)
+                conn.connect()
+                return
+            }
+            // Legacy / Android-Auto callers: the old manual tether assist, unchanged.
             joinPhoneHotspot(context, qr, gateOnAaSteady, activity)
+            return
+        }
+        // Everything past this point is a SoftAP- or P2P-capable QR (phone-hotspot already returned above).
+        // PER-CALLER factory route (default false = classic below runs byte-for-byte): the caller passes
+        // preferFactory=true (the cockpit's own connection) to route SoftAP/P2P through the factory, but
+        // ONLY off the Android-Auto path — the factory doesn't implement the gateOnAaSteady hand-off, so AA
+        // connects stay classic regardless (flip-work-design.md §6). Retain the handle in
+        // BikeConnectionHolder BEFORE connect() so teardown and Wi-Fi re-acquire can always find it.
+        if (!gateOnAaSteady && preferFactory) {
+            LogBus.log("→ [FACTORY] joinWifi: routing '${qr.ssid}' via factory (preferFactory; non-AA path)")
+            val conn = BikeConnectionFactory.create(context.applicationContext, qr, BikeMemory, DefaultPlatformIO)
+            BikeConnectionHolder.set(conn)
+            conn.connect()
             return
         }
         // AUTO: P2P when the QR is P2P-only (incl. non-DIRECT SSIDs — join by MAC), or DIRECT-*.
         // SoftAP fallback remains in joinWifiP2p.onFailed for SoftAP-capable units.
-        // Never force P2P when the QR is SoftAP-only (action bit3 clear) — Setup→P2P on those
-        // bikes only burns 25s then falls back (Benelli TRK / bj* SSIDs in the field).
-        val useP2p = when (transport) {
-            WifiTransport.P2P -> qr.supportsP2p || !qr.supportsAp
-            WifiTransport.AP -> false
-            WifiTransport.AUTO ->
-                (qr.supportsP2p && !qr.supportsAp) ||
-                    (qr.ssid.startsWith("DIRECT-", ignoreCase = true) &&
-                        (qr.supportsP2p || !qr.supportsAp))
-        }
-        // Per-bike memory refines AUTO only (an explicit P2P/AP setting is the rider's call): once a
-        // transport has produced a live link for THIS bike, use it and skip the dead path. Some dashes
-        // advertise DIRECT-* + SoftAP, so AUTO tries P2P first and burns the whole timeout on every
-        // connect even when P2P never forms a group on this phone, while SoftAP connects in seconds.
+        //
+        // The decision itself now lives in ONE pure function next to ConnectionSpec — `resolveWifiTransport`
+        // — which the FACTORY also calls (via ConnectionSpec.detectedAtPairing), so the two paths can never
+        // disagree about a bike again. This is a pure extraction: `useP2p` is the same expression with no
+        // memory applied (the function's `remembered = null` case), and `effUseP2p` is that expression
+        // refined by the per-bike winner. Per-bike memory refines AUTO only (an explicit P2P/AP setting is
+        // the rider's call), which is why `remembered` stays null unless the Setup preference is AUTO.
         val remembered = if (transport == WifiTransport.AUTO) BikeMemory.winningTransport(context, qr.ssid) else null
-        val effUseP2p = when {
-            remembered == "AP" && qr.supportsAp -> false
-            remembered == "P2P" && qr.supportsP2p -> true
-            else -> useP2p
-        }
+        val useP2p = resolveWifiTransport(qr, transport, remembered = null) == TransportKind.P2P
+        val effUseP2p = resolveWifiTransport(qr, transport, remembered) == TransportKind.P2P
         if (remembered != null && effUseP2p != useP2p) {
             LogBus.log("→ transport memory: '$remembered' connected before for '${qr.ssid}' — using it, skipping the dead path")
         }
@@ -277,6 +410,14 @@ object CfmotoConnect {
             ConnectionState.set(Phase.ERROR, context.getString(R.string.main_phone_hotspot_status))
             return
         }
+        // A bike whose QR carries the BLE mechanism has a connector that does the whole thing by itself —
+        // but only off the Android-Auto path, because the factory has no AA hand-off. Falling through here
+        // silently is what the Rieju rider hit on 2026-08-20 18:51: he tapped connect, the BLE bridge was
+        // skipped without a word, and he was handed a dialog telling him to do the OPPOSITE — copy the
+        // dash's credentials into his own hotspot. Say it before showing it.
+        // The BLE-bike refusal lives in [startAaConnect], before anything is started. Reaching here means
+        // this is a phone-hotspot bike WITHOUT the Bluetooth mechanism (Zontes and friends), for which the
+        // manual method below is the real one.
         LogBus.log(
             "→ phone-hotspot mode (action=${qr.action} mac=${qr.mac}) — " +
                 "assist dialog (app cannot create AP; set dash SSID/pwd in system hotspot)",
@@ -477,8 +618,12 @@ object CfmotoConnect {
      * WITHOUT the classic MainActivity UI. This is the CFMOTO/wantBike branch of MainActivity's
      * `beginGpxProjection()`, moved verbatim. The cockpit must have armed the session first
      * (`GpxSession.prepareFreeRide()`), so [GpxSession.active] is already set here.
+     *
+     * [preferFactory] is forwarded to [joinWifi]: every own-map connect — the interactive cockpit
+     * Conectar AND the foreground/background auto-connect — passes true so its SoftAP/P2P connection runs
+     * through the connection factory. Mirror (espejo) and the Android-Auto path stay classic (default false).
      */
-    fun startCfmotoMap(activity: Activity) {
+    fun startCfmotoMap(activity: Activity, preferFactory: Boolean = false) {
         if (!GpxSession.active) {
             // Cockpit is expected to call GpxSession.prepareFreeRide() first; if not, do nothing harmful.
             LogBus.log("→ Map: nothing prepared — open Map / GPX first")
@@ -499,7 +644,11 @@ object CfmotoConnect {
         tearDownForModeSwitch(activity, clearMap = false, clearMirror = true)
         applyProfile(activity, saved)
         ConnectionState.set(Phase.MIRRORING, BikeMemory.lastBikeName(activity) ?: saved.ssid)
-        joinWifi(activity, saved, gateOnAaSteady = false, activity = activity)
+        // Belt-and-suspenders for the panel-mode race: re-assert the current Map|Panel flag before the
+        // projection binds, so the dash reading DashRemote.panelMode on bind and the live panel handler agree
+        // — the now-playing strip shows in Panel mode without waiting for the cockpit's async applyPanelMode.
+        DashRemote.applyPanelMode(DashRemote.panelMode)
+        joinWifi(activity, saved, gateOnAaSteady = false, activity = activity, preferFactory = preferFactory)
     }
 
     // ---- Auto-connect (background CompanionDeviceService + foreground cockpit fallback) ----
@@ -520,6 +669,60 @@ object CfmotoConnect {
             LogBus.log("[$tag] already ${p.logLabel} — skip"); return false
         }
         return true
+    }
+
+    /**
+     * Has this app session already spent the one automatic attempt the phone-hosted connectors get
+     * ([AutoConnectGate.ONCE_PER_SESSION])? Process-scoped, exactly like `MainActivity.autoConnectStarted`.
+     */
+    @Volatile private var phoneHostedAutoTried = false
+
+    /**
+     * "Is the bike near enough to try?" — asked the way THIS bike's connector can actually answer it
+     * ([autoConnectGateFor]).
+     *
+     * The bug: auto-connect asked one question for every bike, "is the BIKE's SSID in a Wi-Fi scan?". For the
+     * two phone-hosts-the-network connectors the phone creates the network, so there is no bike SSID to find
+     * and the gate can NEVER pass — those bikes never auto-connected, and the log said something that reads
+     * like a fact about the bike but is a fact about the question (real Rieju log:
+     * `[auto-fg] 'Phone hotspot (16:6b:50)' not in range — will retry on resume`).
+     *
+     * SoftAP/P2P keep the scan gate untouched: there the dash really does host the network, so its SSID is a
+     * true presence signal and dropping it would make a parked phone attempt all day.
+     */
+    private fun nearGateAllows(activity: Activity, saved: QrData, gate: AutoConnectGate, tag: String): Boolean {
+        val name = BikeMemory.lastBikeName(activity)
+        return when (gate) {
+            AutoConnectGate.BIKE_SSID_IN_RANGE -> {
+                if (BikeWifi.isSsidInRange(activity, saved.ssid) == false) {
+                    LogBus.log("[$tag] '$name' not in range — will retry on resume")
+                    false
+                } else {
+                    true
+                }
+            }
+            AutoConnectGate.ONCE_PER_SESSION -> {
+                // Nothing to scan for (the phone hosts the network), so the budget IS the gate: one attempt
+                // per app session. Without it this fires on every ON_RESUME of the dashboard — a Wi-Fi Direct
+                // group, a ~15 s wait and a terminal error every time the rider comes back to that screen.
+                // Read-only here; the budget is SPENT only once the attempt is really committed, so a
+                // debounced no-op cannot burn a rider's single automatic try.
+                if (phoneHostedAutoTried) {
+                    LogBus.log("[$tag] '$name' already had its one automatic attempt this session — tap Connect")
+                    false
+                } else {
+                    LogBus.log("[$tag] '$name' hosts its network on the PHONE (nothing to scan for) — one automatic attempt")
+                    true
+                }
+            }
+            AutoConnectGate.RIDER_ONLY -> {
+                // The rider has to switch the hotspot on and answer the assist dialog first; an automatic
+                // attempt could only pop a modal nobody asked for. (It never auto-connected before either —
+                // the range gate just blamed the bike for it.)
+                LogBus.log("[$tag] '$name' needs you to turn the phone hotspot on — tap Connect")
+                false
+            }
+        }
     }
 
     /** Single-flight claim: true only for the first caller inside the debounce window. */
@@ -565,7 +768,7 @@ object CfmotoConnect {
         tearDownForModeSwitch(app, clearMap = false, clearMirror = true)
         applyProfile(app, saved)
         ConnectionState.set(Phase.MIRRORING, BikeMemory.lastBikeName(app) ?: saved.ssid)
-        joinWifi(app, saved, gateOnAaSteady = false, activity = null)
+        joinWifi(app, saved, gateOnAaSteady = false, activity = null, preferFactory = true)
         return true
     }
 
@@ -583,14 +786,14 @@ object CfmotoConnect {
         if (!WifiGate.isWifiEnabled(activity)) {
             LogBus.log("[auto-fg] phone Wi-Fi is off — tap Connect to turn it on"); return false
         }
-        if (BikeWifi.isSsidInRange(activity, saved.ssid) == false) {
-            LogBus.log("[auto-fg] '${BikeMemory.lastBikeName(activity)}' not in range — will retry on resume")
-            return false
-        }
+        val gate = autoConnectGateFor(BikeMemory.effectiveMode(activity, saved))
+        if (!nearGateAllows(activity, saved, gate, "auto-fg")) return false
         if (!claimAutoConnect()) { LogBus.log("[auto-fg] another auto-connect just fired — skip"); return false }
+        // Committed — now the phone-hosted connectors' one automatic attempt is spent.
+        if (gate == AutoConnectGate.ONCE_PER_SESSION) phoneHostedAutoTried = true
         if (!GpxSession.active) GpxSession.prepareFreeRide()
         LogBus.log("→ [auto-fg] auto-connecting '${BikeMemory.lastBikeName(activity)}' (CFMOTO map)")
-        startCfmotoMap(activity)
+        startCfmotoMap(activity, preferFactory = true)
         return true
     }
 
@@ -649,6 +852,19 @@ object CfmotoConnect {
      */
     fun startAaConnect(activity: Activity, qr: QrData) {
         try {
+            // Refuse BEFORE anything starts. Putting this check further down — inside the Wi-Fi join —
+            // left the AA receiver already running when the join said no, and something upstream kept
+            // retrying: on 2026-08-20 21:30 the phone looped "Starting Android Auto → refused" every three
+            // seconds. A guard that fires after the thing it is guarding has begun is not a guard.
+            if (isBleHotspot(qr)) {
+                LogBus.log(
+                    "→ this bike is given its network over Bluetooth, and Android Auto does not use that " +
+                        "path — not starting it. Connect with the map or the mirror.",
+                )
+                ConnectionState.set(Phase.ERROR, activity.getString(R.string.ovk_aa_needs_map_for_ble))
+                Toast.makeText(activity, R.string.ovk_aa_needs_map_for_ble, Toast.LENGTH_LONG).show()
+                return
+            }
             if (!WifiGate.ensureEnabledOrPrompt(activity)) return
             // AA Connect needs Nearby + Bluetooth so HUR (START_WIRELESS_PROJECTION) can run when
             // WirelessStartupActivity is a no-op (common on AA 16.4+/17.4+). Mirror/Map unchanged.
@@ -813,6 +1029,9 @@ object CfmotoConnect {
      * down any Wi‑Fi Direct (P2P) group. No MediaProjection teardown (mirror-only, stays in MainActivity).
      */
     fun stop(context: Context) {
+        // Tear down a live factory connection FIRST (no-op when the dev toggle is OFF / no factory connection
+        // is held); the classic teardown below then runs byte-for-byte — both are idempotent (design §4).
+        BikeConnectionHolder.disconnectAndClear()
         LogBus.log("→ stopping bike projection (cockpit)")
         try { AaVideoBridge.onSteadyVideo = null } catch (_: Exception) {}
         try { AndroidAutoService.stop(context) } catch (e: Exception) { LogBus.log("AA stop: $e") }

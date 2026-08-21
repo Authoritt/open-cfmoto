@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Open CfMoto</string>
+    <string name="app_name">Cockpit</string>
+    <string name="app_name_classic">Cockpit classic</string>
     <string name="about_copyright">© 2026 Alexandru</string>
     <string name="about_copyright_body">Maintained by Alexandru (zanderp). Free software under the GNU AGPL v3 or later — see LICENSE and NOTICE in the repository for the full copyright and attribution text.</string>
     <string name="about_license_body">You may use, study, share, and modify this app under the AGPL. If you redistribute a modified version (including as a network service), you must offer the complete corresponding source under the same license.</string>
@@ -523,14 +524,25 @@
     <string name="main_phone_hotspot_no_iface">No phone hotspot found — enable Android hotspot with the dash SSID/password, then Connect again</string>
     <string name="main_phone_hotspot_no_peer">Hotspot is up but the dash wasn\'t found — keep the pairing screen open and retry</string>
     <string name="main_phone_hotspot_dialog_title">Phone hotspot setup</string>
-    <string name="main_phone_hotspot_dialog_message">This bike joins your phone\'s hotspot (Android cannot create that hotspot for you).\n\n1. Type the SSID and password shown on the dash (reminder only).\n2. Open hotspot settings and set those exact values.\n3. Keep the dash pairing screen open — we wait ~45s for the bike.</string>
-    <string name="main_phone_hotspot_ssid_hint">Dash hotspot SSID</string>
-    <string name="main_phone_hotspot_pwd_hint">Dash hotspot password</string>
+    <string name="main_phone_hotspot_dialog_message">The dash joins your phone\'s hotspot. Android won\'t let an app switch that on for you, so it\'s two steps.</string>
+    <string name="main_phone_hotspot_step1">1. Copy the network name and password shown on the dash. First time? Type them here — they\'re saved.</string>
+    <string name="main_phone_hotspot_step2">2. Open hotspot settings, paste them there and switch it on. Then come back: the dash joins on its own — leave its pairing screen open.</string>
+    <string name="main_phone_hotspot_copy">Copy</string>
+    <string name="main_phone_hotspot_copied_ssid">Network name copied</string>
+    <string name="main_phone_hotspot_copied_pwd">Password copied</string>
+    <string name="main_phone_hotspot_copy_empty">Type what the dash shows first.</string>
+    <string name="main_phone_hotspot_ssid_hint">Network name on the dash</string>
+    <string name="main_phone_hotspot_pwd_hint">Password on the dash</string>
     <string name="main_phone_hotspot_open_settings">Open hotspot settings</string>
     <string name="main_phone_hotspot_ready">Hotspot is on — scan</string>
     <string name="main_phone_hotspot_settings_failed">Couldn\'t open hotspot settings — open them manually</string>
     <string name="main_phone_hotspot_cancelled">Phone hotspot setup cancelled</string>
     <string name="main_phone_hotspot_waiting_named">Waiting for hotspot \"%1$s\" — bike should join your phone</string>
+    <string name="main_phone_hotspot_aa_no_bridge">Android Auto does not use the Bluetooth bridge on this bike, so you get the manual hotspot method. For the automatic one, connect with the map or the mirror.</string>
+    <string name="ovk_aa_needs_map_for_ble">Android Auto cannot reach this bike: its dash is given the network over Bluetooth, and Android Auto does not use that. Connect with the map or the mirror instead.</string>
+    <string name="ovk_dash_never_joined">The dash took the Wi-Fi credentials and never joined. Nothing to do on the dash: it has no way to enter a network by hand. We are still working on this bike.</string>
+    <string name="main_phone_hotspot_readable_title">Enter this Wi-Fi on the dash</string>
+    <string name="main_phone_hotspot_readable_message">Your phone is now hosting the Wi-Fi. On the dash pairing screen, enter:\n\nNetwork: %1$s\nPassword: %2$s\nPhone IP: %3$s\n\nIf the dash doesn\'t find it, it may only support 2.4 GHz Wi-Fi.</string>
     <string name="main_donate_failed">Couldn\'t open donate link</string>
     <string name="main_settings_failed">Couldn\'t open app settings</string>
     <string name="main_download_failed">Couldn\'t open download link</string>
@@ -604,9 +616,9 @@
     <string name="ovk_call_active">On call</string>
     <string name="ovk_call_answer">Answer</string>
     <string name="ovk_call_hangup">Hang up</string>
-    <string name="ovk_music_grant_access_desc">Music: grant notification access</string>
-    <string name="ovk_music_grant_access">Grant access</string>
-    <string name="ovk_music_none">No music</string>
+    <string name="ovk_music_grant_access_desc">To see and control your music on the bike dash, Android needs notification access turned on.</string>
+    <string name="ovk_music_grant_access">Turn on</string>
+    <string name="ovk_music_none">Nothing playing</string>
     <!-- cockpit: unified map / destination / nav progress -->
     <string name="ovk_destination_fallback">Destination</string>
     <string name="ovk_locate_permission_needed">Grant location permission to center the map</string>
@@ -699,6 +711,9 @@
     <string name="ovk_controls_subtitle">The dash without touching it</string>
     <string name="ovk_volume">Volume</string>
     <string name="ovk_navigate">Navigate</string>
+    <string name="ovk_handlebar_audio">Handlebar controls audio</string>
+    <string name="ovk_handlebar_audio_on">On: the bars change volume and skip tracks on the phone.</string>
+    <string name="ovk_handlebar_audio_off">Off: the bars drive the dash — the map, or Android Auto.</string>
     <string name="ovk_voice">Voice</string>
     <string name="ovk_home">Home</string>
     <string name="ovk_back">Back</string>
@@ -710,6 +725,63 @@
     <string name="ovk_garage_saved">saved</string>
     <string name="ovk_garage_no_mode">NO MODE</string>
     <string name="ovk_garage_mode_subtitle">Chosen once per bike. Editable here whenever you like.</string>
+    <!-- garage: remove a bike -->
+    <string name="ovk_garage_remove">Remove</string>
+    <string name="ovk_dlg_remove_title">Remove %1$s?</string>
+    <string name="ovk_dlg_remove_body">This bike and its connection settings will be deleted. You can re-scan its QR anytime.</string>
+    <!-- garage: per-bike default map provider (config-ownership design doc §2) -->
+    <string name="ovk_garage_no_map">NO DEFAULT</string>
+    <string name="ovk_dlg_map_title">Default map for %1$s?</string>
+    <string name="ovk_garage_map_subtitle">Seeds the Map screen for this bike. Change anytime.</string>
+    <!-- garage/scan: per-bike connection mechanism (ConnectorChoice) -->
+    <string name="ovk_garage_conn_label">Connection</string>
+    <string name="ovk_dlg_conn_title">How does %1$s connect?</string>
+    <string name="ovk_garage_conn_subtitle">Auto-detected. Pin one here only if your bike needs a specific one.</string>
+    <!-- Named by MECHANISM, never by brand: a rider reads the badge on the bike, not the protocol, so a
+         brand label ("Rieju") on a mechanism sends working bikes of other brands to the wrong connector.
+         Brands live in the "?" sheet below, as tested-on evidence. -->
+    <string name="ovk_conn_auto">Automatic</string>
+    <string name="ovk_conn_softap">SoftAP</string>
+    <string name="ovk_conn_p2p">P2P</string>
+    <string name="ovk_conn_ble">BLE</string>
+    <string name="ovk_conn_hotspot">Hotspot</string>
+    <string name="ovk_conn_auto_desc">The app picks the mechanism · now: %1$s</string>
+    <string name="ovk_conn_softap_desc">The dash creates the network and your phone joins it</string>
+    <string name="ovk_conn_p2p_desc">Wi-Fi Direct with the dash</string>
+    <string name="ovk_conn_ble_desc">Your phone creates the network and sends the password over Bluetooth</string>
+    <string name="ovk_conn_hotspot_desc">You turn your phone hotspot on and the dash joins it</string>
+    <!-- AUTO row detail: names the connector it actually picked (e.g. "Automatic · P2P") -->
+    <string name="ovk_conn_auto_detail">Automatic · %1$s</string>
+    <!-- connector help sheet ("?" affordance next to the connector row / in the picker header) -->
+    <string name="ovk_conn_help_title">How does your bike connect?</string>
+    <string name="ovk_conn_help_softap_desc">The dash creates its own Wi-Fi network and your phone joins it.</string>
+    <string name="ovk_conn_help_softap_tested">Tested on: CFMoto (450NK), Voge, Benelli, QJ, Morini, Morbidelli and more</string>
+    <string name="ovk_conn_help_p2p_desc">Wi-Fi Direct with the dash. Usually connects faster.</string>
+    <string name="ovk_conn_help_p2p_tested">Tested on: CFMoto (DIRECT-… networks)</string>
+    <string name="ovk_conn_help_ble_desc">Your phone creates the network and hands the dash the password over Bluetooth.</string>
+    <string name="ovk_conn_help_ble_tested">⚠ New — not yet tested on a bike. Built for the Rieju Aventura 500, from reverse-engineering the Carbit dash software (action=128).</string>
+    <!-- Invitation to experiment: the BLE credential push belongs to the Carbit software many dashes run,
+         not to Rieju. We cannot test that from here; a rider with the bike in front of them can. -->
+    <string name="ovk_conn_help_ble_try">The trick isn\'t Rieju-only: it comes from the Carbit software many dashes run. If your bike works with Hotspot, give BLE a try — if the dash takes it, it will connect on its own, with nothing for you to switch on.</string>
+    <string name="ovk_conn_help_hotspot_desc">Turn your phone hotspot on and the dash joins it.</string>
+    <string name="ovk_conn_help_hotspot_tested">Tested on: Zontes 125X and other Carbit dashes</string>
+    <string name="ovk_conn_help_footer">If it won\'t connect, try a different connector from the Garage.</string>
+    <!-- terminal connect failure: the connector saved in the Garage never established -->
+    <string name="ovk_conn_failed_rescan">Couldn\'t connect with %1$s. Scan the bike\'s QR again to update the garage.</string>
+    <!-- bounded, rider-visible reconnect on the SAME connector (a network drop, not a wrong connector) -->
+    <string name="ovk_conn_reconnecting_n">Reconnecting %1$d/%2$d</string>
+    <!-- gave up reconnecting a link that WAS alive (network drop): rider-facing, says what to do next -->
+    <string name="ovk_conn_lost_retry">Lost the connection to the bike. Tap Connect to try again.</string>
+    <!-- bikes whose connector needs the app on screen (Rieju BLE handoff / manual hotspot): background connect refused -->
+    <string name="ovk_conn_needs_app">This bike only connects with the app open. Tap Connect.</string>
+    <!-- Wi-Fi Direct pre-flight: the three states in which the connectors that use it cannot even start.
+         Each says what to DO, because "couldn't connect, scan the QR again" is wrong advice for all three:
+         the garage entry is fine, the phone isn't ready. No internal words here (no reason codes, no
+         "group owner") - those belong in the log. -->
+    <string name="ovk_conn_wifi_off_phone_hosts">Turn the phone\'s Wi-Fi on: this bike connects to a network your phone creates.</string>
+    <string name="ovk_conn_wifi_off_direct">Turn the phone\'s Wi-Fi on: this bike connects over Wi-Fi Direct.</string>
+    <string name="ovk_conn_nearby_denied">Nearby devices permission is off. Turn it on in Settings so the phone can set up the network with the bike.</string>
+    <string name="ovk_conn_wifi_direct_unsupported">This phone can\'t create the network this bike needs. Try another connector from the Garage.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Camera permission required</string>
     <string name="ovk_scan_perm_body">to scan the dash QR</string>
@@ -717,6 +789,14 @@
     <string name="ovk_scan_aim">Point at the dash QR</string>
     <string name="ovk_scan_photo">Photo</string>
     <string name="ovk_scan_manual_wifi">Enter Wi-Fi manually</string>
+    <string name="ovk_scan_paired">Bike paired</string>
+    <!-- A code was read but it is not a dash pairing QR: the rider must SEE that something happened. -->
+    <string name="ovk_scan_qr_unknown">That QR isn\'t from a compatible bike. Look for the pairing QR on the dash screen.</string>
+    <string name="ovk_scan_qr_none_in_photo">No QR found in that image.</string>
+    <string name="ovk_scan_done">Done</string>
+    <!-- Scan's connect step: the connectors are shown here, not hidden, because this is where a failed
+         connect gets fixed (pick another, press Connect again). -->
+    <string name="ovk_scan_how_it_connects">How it connects</string>
     <!-- settings screen -->
     <string name="ovk_settings_title">Settings</string>
     <string name="ovk_settings_group_connection">Connection</string>
@@ -732,7 +812,6 @@
     <string name="ovk_autoconnect_channel_desc">Shown while the app connects to the bike on its own.</string>
     <string name="ovk_settings_group_projection">Projection</string>
     <string name="ovk_settings_default_mode">Default mode</string>
-    <string name="ovk_settings_map_provider">Map provider</string>
     <string name="ovk_settings_dash_renderer">Dash renderer</string>
     <string name="ovk_renderer_maplibre">MapLibre · vector 3D</string>
     <string name="ovk_renderer_osmdroid">osmdroid · raster</string>
@@ -756,6 +835,8 @@
     <string name="ovk_settings_group_developer">Developer</string>
     <string name="ovk_settings_developer_mode">Developer mode</string>
     <string name="ovk_settings_developer_mode_sub">On — 7 taps on Version toggles it</string>
+    <string name="ovk_settings_use_factory">New connection engine (450NK) — A/B</string>
+    <string name="ovk_settings_use_factory_sub">Route SoftAP/P2P through the new state machine. Default off.</string>
     <string name="ovk_settings_diagnostics">Logs</string>
     <string name="ovk_settings_diagnostics_val">Session log</string>
     <!-- Native cockpit log viewer (ui/settings/LogScreen.kt) -->
@@ -1031,4 +1112,18 @@
     <string name="ovk_map_theme_day">Day</string>
     <string name="ovk_map_theme_night">Night</string>
     <string name="ovk_dash_view">Dash view (Android Auto)</string>
+    <!-- dash view (Android Auto): the REAL dash video on the phone — never a stand-in map -->
+    <string name="ovk_dash_live">Dash live</string>
+    <string name="ovk_dash_no_video">No dash image yet. Connect the bike — with Google/Waze the bike dash is painted by Android Auto.</string>
+    <string name="ovk_dash_aa_note">With Google or Waze, Android Auto paints the bike dash: connect the bike first, then set the destination — it reaches the dash through Android Auto, not through our map.</string>
+    <string name="ovk_provider_aa_hint">Google/Waze: Android Auto paints the dash — connect first, then set the destination.</string>
+    <string name="ovk_dash_connect_first">Connect to the bike first</string>
+    <string name="ovk_btn_needs_bt_on">Turn Bluetooth on so the handlebar controls the dash — otherwise ▲/▼ just change your phone volume.</string>
+    <string name="ovk_btn_bike_not_connected">Bluetooth is on, but the bike is not connected to it — the handlebar cannot reach the phone. Connect it from the Bluetooth menu on the bike, or tap the bike in the Android Bluetooth settings.</string>
+    <string name="ovk_btn_needs_bt_permission">Allow the Bluetooth permission so the handlebar controls the dash — otherwise ▲/▼ just change your phone volume.</string>
+    <string name="ovk_radio_wifi_title">Turn on Wi-Fi</string>
+    <string name="ovk_radio_wifi_body">Your bike connects over Wi-Fi and the phone’s Wi-Fi is off. Android will not let the app switch it on, so this opens the panel where you can.</string>
+    <string name="ovk_radio_bt_title">Turn on Bluetooth</string>
+    <string name="ovk_radio_bt_body">This bike receives the network password over Bluetooth, and Bluetooth is off. Without it the dash cannot connect.</string>
+    <string name="ovk_radio_enable">Turn on</string>
 </resources>

@@ -127,6 +127,11 @@ class VideoPipeline(
     // freshly-attached bike client receives is a full SPS+PPS+IDR. See onBikeDataStart().
     @Volatile private var awaitKeyframe = false
 
+    // When the dash attached. The dash decoder paints green/garbled until it receives a full keyframe,
+    // so the gap between this and the first keyframe we queue IS the duration of the green the rider
+    // sees. Measured rather than guessed: reported as "the map went green for longer this time".
+    @Volatile private var bikeAttachedAtMs = 0L
+
     /** Latest Annex-B SPS/PPS from the encoder (null until [BUFFER_FLAG_CODEC_CONFIG]). */
     fun codecConfigBytes(): ByteArray? = codecConfig
 
@@ -624,7 +629,13 @@ class VideoPipeline(
                         // client never received, so serving it would leave the dash decoder uninitialised
                         // (black). Drop until the next keyframe. (Buffer still released below.)
                     } else {
-                        if (isKey) awaitKeyframe = false
+                        if (isKey) {
+                            if (awaitKeyframe && bikeAttachedAtMs > 0L) {
+                                log("[VIDEO] first keyframe queued ${android.os.SystemClock.elapsedRealtime() - bikeAttachedAtMs}ms after the dash attached — the dash paints green for exactly this long")
+                                bikeAttachedAtMs = 0L
+                            }
+                            awaitKeyframe = false
+                        }
                         val out = if (isKey && codecConfig != null) codecConfig!! + bytes else bytes
                         writeDump(out)
                         // Keep the queue fresh: if full, drop oldest so we never lag far behind. A
@@ -728,6 +739,7 @@ class VideoPipeline(
     fun onBikeDataStart() {
         frameQueue.clear()
         awaitKeyframe = true
+        bikeAttachedAtMs = android.os.SystemClock.elapsedRealtime()
         try {
             codec?.setParameters(android.os.Bundle().apply {
                 putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)

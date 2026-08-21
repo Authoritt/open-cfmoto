@@ -39,6 +39,12 @@ object BikeScope {
         return p.getBoolean(base, def)
     }
 
+    /** True when this flag was actually WRITTEN (for this bike or globally) — i.e. the rider chose it. */
+    fun hasBoolean(p: SharedPreferences, ctx: Context, base: String): Boolean {
+        suffix(ctx)?.let { if (p.contains("$base#$it")) return true }
+        return p.contains(base)
+    }
+
     fun putBoolean(p: SharedPreferences, ctx: Context, base: String, value: Boolean) {
         p.edit().putBoolean(scopedKey(ctx, base), value).apply()
     }

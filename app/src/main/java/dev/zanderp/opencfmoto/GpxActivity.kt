@@ -3,6 +3,7 @@
 // Part of OpenCfMoto. Free software under the GNU AGPL v3 or later; see LICENSE and NOTICE.
 package dev.zanderp.opencfmoto
 
+import dev.overtake.maps.contract.SearchIntent
 import dev.overtake.maps.search.NominatimSearch
 import dev.overtake.maps.OfflineManager
 import dev.overtake.maps.render.GpxOsmdroid
@@ -930,8 +931,10 @@ class GpxActivity : AppCompatActivity() {
         val near = lastKnown()
         val offline = OfflinePoiIndex.search(this, q, near?.first, near?.second)
         // Prefer online location-biased results (Photon) so "Plo"/"Cons" surface major cities.
+        // SUBMIT: this only runs from the Search button / the keyboard action, so the precise
+        // provider is allowed to join in (see SearchIntent).
         NominatimSearch.searchAsync(
-            q, near?.first, near?.second,
+            q, near?.first, near?.second, intent = SearchIntent.SUBMIT,
             onResult = { list -> runOnUiThread {
                 showResults(if (list.isNotEmpty()) list else offline)
             } },

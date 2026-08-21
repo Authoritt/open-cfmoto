@@ -76,6 +76,7 @@ import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.MapPlace
 import dev.zanderp.opencfmoto.overtakeOffline
 import dev.overtake.maps.OfflineManager
+import dev.overtake.maps.contract.SearchIntent
 import dev.overtake.maps.search.NominatimSearch
 import dev.overtake.maps.route.offline.OfflineAreasStore
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
@@ -430,10 +431,12 @@ private fun SearchPlaceDialog(
         searching = true
         error = null
         results = emptyList()
+        // SUBMIT: doSearch() runs from the dialog's search action only, never while typing.
         NominatimSearch.searchAsync(
             q,
             nearLat = near?.first,
             nearLon = near?.second,
+            intent = SearchIntent.SUBMIT,
             onResult = { list -> ui { searching = false; results = list } },
             onError = { e -> ui { searching = false; error = e } },
         )

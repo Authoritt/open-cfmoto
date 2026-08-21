@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Draft + terminology pass — improve via PR: docs/TRANSLATIONS.md -->
 <resources>
-    <string name="app_name">Open CfMoto</string>
+    <string name="app_name">Cockpit</string>
+    <string name="app_name_classic">Cockpit clásico</string>
     <string name="about_copyright">© 2026 Alexandru</string>
     <string name="about_copyright_body">Mantenido por Alexandru (zanderp). Software libre bajo la GNU AGPL v3 o posterior: consulta LICENSE y NOTICE en el repositorio para ver el texto completo de derechos de autor y atribución.</string>
     <string name="about_license_body">Puedes usar, estudiar, compartir y modificar esta aplicación según la AGPL. Si redistribuyes una versión modificada (incluso como servicio de red), debes ofrecer el código fuente correspondiente completo bajo la misma licencia.</string>
@@ -517,14 +518,25 @@
     <string name="main_phone_hotspot_no_iface">No se encontró el punto de acceso del teléfono: actívalo en Android con el SSID y la contraseña del tablero y vuelve a Conectar</string>
     <string name="main_phone_hotspot_no_peer">El punto de acceso está activo pero no se encontró el tablero: mantén abierta la pantalla de emparejamiento y reinténtalo</string>
     <string name="main_phone_hotspot_dialog_title">Configurar el punto de acceso del teléfono</string>
-    <string name="main_phone_hotspot_dialog_message">Esta moto se conecta al punto de acceso de tu teléfono (Android no puede crear ese punto de acceso por ti).\n\n1. Escribe el SSID y la contraseña que muestra el tablero (solo como recordatorio).\n2. Abre los ajustes del punto de acceso y pon esos valores exactos.\n3. Mantén abierta la pantalla de emparejamiento del tablero: esperamos unos 45 s a la moto.</string>
-    <string name="main_phone_hotspot_ssid_hint">SSID del punto de acceso del tablero</string>
-    <string name="main_phone_hotspot_pwd_hint">Contraseña del punto de acceso del tablero</string>
+    <string name="main_phone_hotspot_dialog_message">El tablero se une al hotspot de tu teléfono. Android no deja que una app lo encienda por ti, así que son dos pasos.</string>
+    <string name="main_phone_hotspot_step1">1. Copia el nombre de red y la clave que muestra el tablero. ¿Primera vez? Escríbelos aquí: se guardan.</string>
+    <string name="main_phone_hotspot_step2">2. Abre los ajustes de hotspot, pégalos ahí y enciéndelo. Luego vuelve: el tablero se une solo — deja abierta su pantalla de emparejamiento.</string>
+    <string name="main_phone_hotspot_copy">Copiar</string>
+    <string name="main_phone_hotspot_copied_ssid">Nombre de red copiado</string>
+    <string name="main_phone_hotspot_copied_pwd">Clave copiada</string>
+    <string name="main_phone_hotspot_copy_empty">Escribe primero lo que muestra el tablero.</string>
+    <string name="main_phone_hotspot_ssid_hint">Nombre de red del tablero</string>
+    <string name="main_phone_hotspot_pwd_hint">Clave del tablero</string>
     <string name="main_phone_hotspot_open_settings">Abrir los ajustes del punto de acceso</string>
     <string name="main_phone_hotspot_ready">El punto de acceso está activo: escanea</string>
     <string name="main_phone_hotspot_settings_failed">No se pudieron abrir los ajustes del punto de acceso: ábrelos manualmente</string>
     <string name="main_phone_hotspot_cancelled">Configuración del punto de acceso cancelada</string>
     <string name="main_phone_hotspot_waiting_named">Esperando al punto de acceso \"%1$s\": la moto debería conectarse a tu teléfono</string>
+    <string name="main_phone_hotspot_aa_no_bridge">Android Auto no usa el puente Bluetooth de esta moto, así que te toca el método manual. Para el automático, conecta con el mapa o el espejo.</string>
+    <string name="ovk_aa_needs_map_for_ble">Android Auto no puede con esta moto: a su tablero se le pasa la red por Bluetooth, y Android Auto no usa esa vía. Conecta con el mapa o con el espejo.</string>
+    <string name="ovk_dash_never_joined">El tablero recibió la clave y no se conectó. No hay nada que hacer en el tablero: no tiene forma de meter una red a mano. Seguimos trabajando en esta moto.</string>
+    <string name="main_phone_hotspot_readable_title">Escribe esta Wi-Fi en el tablero</string>
+    <string name="main_phone_hotspot_readable_message">Tu teléfono ya está creando la Wi-Fi. En la pantalla de emparejamiento del tablero, escribe:\n\nRed: %1$s\nClave: %2$s\nIP del teléfono: %3$s\n\nSi el tablero no la encuentra, puede que solo admita Wi-Fi de 2,4 GHz.</string>
     <string name="main_donate_failed">No se pudo abrir el enlace de donación</string>
     <string name="main_settings_failed">No se pudo abrir la configuración de la aplicación</string>
     <string name="main_download_failed">No se pudo abrir el enlace de descarga</string>
@@ -592,9 +604,9 @@
     <string name="ovk_call_active">En llamada</string>
     <string name="ovk_call_answer">Contestar</string>
     <string name="ovk_call_hangup">Colgar</string>
-    <string name="ovk_music_grant_access_desc">Música: concede acceso a notificaciones</string>
-    <string name="ovk_music_grant_access">Conceder acceso</string>
-    <string name="ovk_music_none">Sin música</string>
+    <string name="ovk_music_grant_access_desc">Para ver y controlar tu música en el tablero de la moto, Android pide activar el acceso a notificaciones.</string>
+    <string name="ovk_music_grant_access">Activar</string>
+    <string name="ovk_music_none">No hay música sonando</string>
     <!-- cockpit: unified map / destination / nav progress -->
     <string name="ovk_destination_fallback">Destino</string>
     <string name="ovk_locate_permission_needed">Otorga permiso de ubicación para centrar el mapa</string>
@@ -687,6 +699,9 @@
     <string name="ovk_controls_subtitle">El tablero sin tocarlo</string>
     <string name="ovk_volume">Volumen</string>
     <string name="ovk_navigate">Navegar</string>
+    <string name="ovk_handlebar_audio">El manillar maneja el audio</string>
+    <string name="ovk_handlebar_audio_on">Encendido: los botones suben el volumen y cambian de canción en el teléfono.</string>
+    <string name="ovk_handlebar_audio_off">Apagado: los botones manejan el tablero — el mapa, o Android Auto.</string>
     <string name="ovk_voice">Voz</string>
     <string name="ovk_home">Inicio</string>
     <string name="ovk_back">Atrás</string>
@@ -698,6 +713,56 @@
     <string name="ovk_garage_saved">guardada</string>
     <string name="ovk_garage_no_mode">SIN MODO</string>
     <string name="ovk_garage_mode_subtitle">Se elige una vez por moto. Editable aquí cuando quieras.</string>
+    <!-- garage: quitar una moto -->
+    <string name="ovk_garage_remove">Quitar</string>
+    <string name="ovk_dlg_remove_title">¿Quitar %1$s?</string>
+    <string name="ovk_dlg_remove_body">Se borrará esta moto y sus ajustes de conexión. Puedes volver a escanear su QR cuando quieras.</string>
+    <!-- garage/scan: mecanismo de conexión por moto (ConnectorChoice) -->
+    <string name="ovk_garage_conn_label">Conexión</string>
+    <string name="ovk_dlg_conn_title">¿Cómo se conecta %1$s?</string>
+    <string name="ovk_garage_conn_subtitle">Se detecta sola. Fíjala aquí solo si tu moto necesita una en concreto.</string>
+    <!-- Nombrados por MECANISMO, nunca por marca (las marcas van en la hoja "?" como evidencia). -->
+    <string name="ovk_conn_auto">Automático</string>
+    <string name="ovk_conn_softap">SoftAP</string>
+    <string name="ovk_conn_p2p">P2P</string>
+    <string name="ovk_conn_ble">BLE</string>
+    <string name="ovk_conn_hotspot">Hotspot</string>
+    <string name="ovk_conn_auto_desc">La app elige el mecanismo · ahora: %1$s</string>
+    <string name="ovk_conn_softap_desc">El tablero crea la red y el teléfono se une</string>
+    <string name="ovk_conn_p2p_desc">Wi-Fi Directo con el tablero</string>
+    <string name="ovk_conn_ble_desc">El teléfono crea la red y pasa la clave por Bluetooth</string>
+    <string name="ovk_conn_hotspot_desc">Enciendes el hotspot del teléfono y el tablero se une</string>
+    <!-- fila AUTO: nombra el conector que realmente usará (p.ej. "Automático · CFMoto Directo (P2P)") -->
+    <string name="ovk_conn_auto_detail">Automático · %1$s</string>
+    <!-- hoja de ayuda de conectores ("?" junto a la fila / en la cabecera del selector) -->
+    <string name="ovk_conn_help_title">¿Cómo se conecta tu moto?</string>
+    <string name="ovk_conn_help_softap_desc">El tablero crea su propia red Wi-Fi y el teléfono se une.</string>
+    <string name="ovk_conn_help_softap_tested">Probado en: CFMoto (450NK), Voge, Benelli, QJ, Morini, Morbidelli y más</string>
+    <string name="ovk_conn_help_p2p_desc">Wi-Fi Directo con el tablero. Suele conectar más rápido.</string>
+    <string name="ovk_conn_help_p2p_tested">Probado en: CFMoto (redes DIRECT-…)</string>
+    <string name="ovk_conn_help_ble_desc">El teléfono crea la red y le pasa la clave al tablero por Bluetooth.</string>
+    <string name="ovk_conn_help_ble_tested">⚠ Nuevo — aún sin probar en una moto. Hecho para la Rieju Aventura 500, a partir de ingeniería inversa del software Carbit del tablero (action=128).</string>
+    <!-- Invitación a experimentar: el envío de la clave por Bluetooth es del software Carbit que llevan
+         muchos tableros, no de Rieju. Aquí no podemos probarlo; un piloto con la moto delante, sí. -->
+    <string name="ovk_conn_help_ble_try">El truco no es solo de Rieju: viene del software Carbit que llevan muchos tableros. Si tu moto funciona con Hotspot, prueba BLE — si el tablero lo acepta, se conectará sola y no tendrás que encender nada.</string>
+    <string name="ovk_conn_help_hotspot_desc">Enciendes el hotspot del teléfono y el tablero se une.</string>
+    <string name="ovk_conn_help_hotspot_tested">Probado en: Zontes 125X y otros tableros Carbit</string>
+    <string name="ovk_conn_help_footer">Si no conecta, prueba con otro conector desde el Garaje.</string>
+    <!-- fallo terminal de conexión: el conector guardado en el Garaje no logró establecerse -->
+    <string name="ovk_conn_failed_rescan">No se pudo conectar con %1$s. Escanea el QR de la moto otra vez para actualizar el garaje.</string>
+    <!-- reintento acotado y visible sobre el MISMO conector (caída de red, no conector equivocado) -->
+    <string name="ovk_conn_reconnecting_n">Reconectando %1$d/%2$d</string>
+    <!-- se agotaron los reintentos de un enlace que SÍ estuvo vivo (caída de red): qué hacer ahora -->
+    <string name="ovk_conn_lost_retry">Se perdió la conexión con la moto. Toca Conectar para reintentar.</string>
+    <!-- motos cuyo conector necesita la app en pantalla (Rieju BLE / hotspot manual): no se conecta en segundo plano -->
+    <string name="ovk_conn_needs_app">Esta moto se conecta solo con la app abierta. Toca Conectar.</string>
+    <!-- Comprobación previa de Wi-Fi Directo: los tres casos en los que el conector no puede ni empezar.
+         Cada uno dice QUÉ HACER; "escanea el QR otra vez" sería mal consejo en los tres, porque el garaje
+         está bien y lo que no está listo es el teléfono. -->
+    <string name="ovk_conn_wifi_off_phone_hosts">Enciende el Wi-Fi del teléfono: esta moto se conecta a una red que crea tu teléfono.</string>
+    <string name="ovk_conn_wifi_off_direct">Enciende el Wi-Fi del teléfono: esta moto se conecta por Wi-Fi Directo.</string>
+    <string name="ovk_conn_nearby_denied">Falta el permiso de dispositivos cercanos. Actívalo en Ajustes para que el teléfono pueda crear la red con la moto.</string>
+    <string name="ovk_conn_wifi_direct_unsupported">Este teléfono no puede crear la red que necesita esta moto. Prueba con otro conector desde el Garaje.</string>
     <!-- scan screen -->
     <string name="ovk_scan_perm_title">Permiso de cámara necesario</string>
     <string name="ovk_scan_perm_body">para escanear el QR del tablero</string>
@@ -705,6 +770,14 @@
     <string name="ovk_scan_aim">Apunta al QR del tablero</string>
     <string name="ovk_scan_photo">Foto</string>
     <string name="ovk_scan_manual_wifi">Ingresar Wi-Fi manualmente</string>
+    <string name="ovk_scan_paired">Moto vinculada</string>
+    <!-- Se leyó un código pero no es un QR de emparejamiento: el piloto tiene que VER que pasó algo. -->
+    <string name="ovk_scan_qr_unknown">Ese QR no es de una moto compatible. Busca el QR de emparejamiento en la pantalla del tablero.</string>
+    <string name="ovk_scan_qr_none_in_photo">No se encontró ningún QR en la imagen.</string>
+    <string name="ovk_scan_done">Listo</string>
+    <!-- Paso de conexión del escaneo: los conectores se ven aquí, no se esconden, porque es aquí donde se
+         arregla una conexión fallida (elige otro y vuelve a tocar Conectar). -->
+    <string name="ovk_scan_how_it_connects">Cómo se conecta</string>
     <!-- settings screen -->
     <string name="ovk_settings_title">Ajustes</string>
     <string name="ovk_settings_group_connection">Conexión</string>
@@ -720,7 +793,6 @@
     <string name="ovk_autoconnect_channel_desc">Se muestra mientras la app se conecta con la moto por su cuenta.</string>
     <string name="ovk_settings_group_projection">Proyección</string>
     <string name="ovk_settings_default_mode">Modo por defecto</string>
-    <string name="ovk_settings_map_provider">Proveedor de mapa</string>
     <string name="ovk_settings_dash_renderer">Motor del tablero</string>
     <string name="ovk_renderer_maplibre">MapLibre · vectorial 3D</string>
     <string name="ovk_renderer_osmdroid">osmdroid · ráster</string>
@@ -744,6 +816,8 @@
     <string name="ovk_settings_group_developer">Desarrollador</string>
     <string name="ovk_settings_developer_mode">Modo desarrollador</string>
     <string name="ovk_settings_developer_mode_sub">Activado — 7 toques en Versión lo alterna</string>
+    <string name="ovk_settings_use_factory">Nuevo motor de conexión (450NK) — A/B</string>
+    <string name="ovk_settings_use_factory_sub">Enruta SoftAP/P2P por la nueva máquina de estados. Desactivado por defecto.</string>
     <string name="ovk_settings_diagnostics">Registros · Diagnóstico</string>
     <string name="ovk_settings_diagnostics_val">Registro de sesión</string>
     <!-- Visor de registros nativo del cockpit (ui/settings/LogScreen.kt) -->
@@ -1019,4 +1093,18 @@
     <string name="ovk_map_theme_day">Día</string>
     <string name="ovk_map_theme_night">Noche</string>
     <string name="ovk_dash_view">Ver tablero (Android Auto)</string>
+    <!-- ver tablero (Android Auto): el vídeo REAL del tablero en el teléfono — nunca un sustituto -->
+    <string name="ovk_dash_live">Tablero en vivo</string>
+    <string name="ovk_dash_no_video">Aún no hay imagen del tablero. Conecta la moto — con Google/Waze el tablero lo pinta Android Auto.</string>
+    <string name="ovk_dash_aa_note">Con Google o Waze, el tablero lo pinta Android Auto: conecta la moto primero y luego pon el destino — llega al tablero por Android Auto, no por nuestro mapa.</string>
+    <string name="ovk_provider_aa_hint">Google/Waze: el tablero lo pinta Android Auto — conecta primero y luego pon el destino.</string>
+    <string name="ovk_dash_connect_first">Conecta la moto primero</string>
+    <string name="ovk_btn_needs_bt_on">Enciende el Bluetooth para manejar el tablero con el manillar — si no, ▲/▼ sólo cambian el volumen del teléfono.</string>
+    <string name="ovk_btn_bike_not_connected">El Bluetooth está encendido, pero la moto no está conectada a él — el manillar no tiene por dónde llegar al teléfono. Conéctala desde el menú Bluetooth de la moto (o toca la moto en los ajustes de Bluetooth de Android).</string>
+    <string name="ovk_btn_needs_bt_permission">Concede el permiso de Bluetooth para manejar el tablero con el manillar — si no, ▲/▼ sólo cambian el volumen del teléfono.</string>
+    <string name="ovk_radio_wifi_title">Enciende el Wi-Fi</string>
+    <string name="ovk_radio_wifi_body">Tu moto se conecta por Wi-Fi y el del teléfono está apagado. Android no deja que la app lo encienda, pero te abro el panel para que lo hagas de un toque.</string>
+    <string name="ovk_radio_bt_title">Enciende el Bluetooth</string>
+    <string name="ovk_radio_bt_body">Esta moto recibe la clave de la red por Bluetooth y lo tienes apagado. Sin él, el tablero no puede conectarse.</string>
+    <string name="ovk_radio_enable">Encender</string>
 </resources>
