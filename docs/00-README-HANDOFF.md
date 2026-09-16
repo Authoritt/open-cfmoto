@@ -11,6 +11,7 @@ writing code.**
 | `02-CURRENT-APP.md` | The current OpenCfMoto app: every source file, what works today, how to build/run/debug. |
 | `08-FIELD-STATE.md` | **Read this first if you are resuming.** Where the work actually is right now: what a real bike has proven, what is waiting on a rider's log, and the facts already paid for in the field. |
 | `03-PLAN-ANDROID-AUTO.md` | The task you are to implement: embed a full Android Auto head-unit receiver so Google Maps/Waze (via Android Auto) render on the bike. Milestones, HUR internals, risks, decisions. |
+| `09-DASH-CONTENT-WALL.md` | **Read before proposing anything new for the dash.** What can and cannot be rendered there: the one permission that blocks projecting other apps (and every workaround already ruled out), what our own content can do instead, and the measured screen-off numbers. Saves re-investigating a closed question. |
 
 ## The one-paragraph story so far
 
