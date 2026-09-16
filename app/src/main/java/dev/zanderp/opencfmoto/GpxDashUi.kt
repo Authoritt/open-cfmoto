@@ -88,6 +88,8 @@ class GpxDashUi(
     private var sensorManager: SensorManager? = null
     private var compassListener: SensorEventListener? = null
     private var released = false
+    /** Flying-start lap timer (upstream b50e774) — armed from the dash's Lap pill. */
+    private val lapTimer = LapTimer()
     /** True once this (projected) dash took a NowPlaying observation, so release() balances it exactly
      *  once — a bind() that returned early (before start) must not decrement another surface's refcount. */
     private var nowPlayingBound = false
@@ -322,6 +324,7 @@ class GpxDashUi(
                 if (p.name == "Parked" || p.subtitle.contains("Parked", ignoreCase = true)) continue
                 out.add(p)
             }
+            lapTimer.gate?.let { out.add(MapPlace("S/F", it.lat, it.lon, "lap")) }
             return out.distinctBy { "${"%.5f".format(it.lat)},${"%.5f".format(it.lon)}|${it.name}" }
         }
         var seenPlacesRev = MapPlaces.revision
@@ -1939,6 +1942,56 @@ class GpxDashUi(
         root.findViewById<Button>(R.id.gpx_create_circuit)?.setOnClickListener { startCircuit() }
         wirePreviewAction(R.id.gpx_preview_circuit) { startCircuit() }
         root.findViewById<View>(R.id.gpx_pill_circuit)?.setOnClickListener { startCircuit() }
+        val lapTick = object : Runnable {
+            override fun run() {
+                if (released || !lapTimer.isOn) return
+                paintLapHud()
+                main.postDelayed(this, 100)
+            }
+            fun paintLapHud() {
+                val card = root.findViewById<View>(R.id.gpx_lap_card) ?: return
+                val currentTv = root.findViewById<TextView>(R.id.gpx_lap_current) ?: return
+                val metaTv = root.findViewById<TextView>(R.id.gpx_lap_meta) ?: return
+                val pill = root.findViewById<TextView>(R.id.gpx_pill_lap)
+                val h = lapTimer.hud(System.currentTimeMillis())
+                if (!h.on) {
+                    card.visibility = View.GONE
+                    pill?.text = context.getString(R.string.gpx_lap)
+                    return
+                }
+                card.visibility = View.VISIBLE
+                pill?.text = context.getString(R.string.gpx_lap_stop)
+                currentTv.text = if (h.waiting) context.getString(R.string.gpx_lap_pass_sf)
+                else "LAP ${h.lap}  ${LapTimer.formatMs(h.currentMs)}"
+                val last = h.lastMs?.let { LapTimer.formatMs(it) } ?: "—"
+                val best = h.bestMs?.let { LapTimer.formatMs(it) } ?: "—"
+                metaTv.text = "LAST $last   BEST $best"
+            }
+        }
+        fun paintLapHud() = lapTick.paintLapHud()
+        root.findViewById<View>(R.id.gpx_pill_lap)?.setOnClickListener {
+            if (lapTimer.isOn) {
+                lapTimer.stop()
+                main.removeCallbacks(lapTick)
+                paintLapHud()
+                refreshPins()
+                statusView.text = "Lap timer off"
+            } else {
+                val loc = lastLoc
+                if (loc == null) {
+                    statusView.text = "Need GPS for lap timer"
+                    return@setOnClickListener
+                }
+                lapTimer.arm(loc.latitude, loc.longitude)
+                paintLapHud()
+                refreshPins()
+                main.removeCallbacks(lapTick)
+                main.post(lapTick)
+                statusView.text = "Lap: ride out, then pass start/finish"
+                if (voiceOn) voiceLocal.speak("Lap timer armed")
+                log("[LAP] armed at ${loc.latitude},${loc.longitude}")
+            }
+        }
         if (GpxSession.pendingCircuit) {
             GpxSession.pendingCircuit = false
             main.postDelayed({
@@ -2435,6 +2488,16 @@ class GpxDashUi(
                 chipSpeed.text = GpxNav.formatSpeed(speedKmhEarly, units)
                 chipSpeedUnit?.text = GpxNav.speedUnitLabel(units)
                 rideStats.onLocation(loc.latitude, loc.longitude, loc.speed)
+                if (lapTimer.onFix(loc.latitude, loc.longitude, loc.time.takeIf { it > 0L }
+                        ?: System.currentTimeMillis())
+                ) {
+                    val h = lapTimer.hud(System.currentTimeMillis())
+                    val last = h.lastMs?.let { LapTimer.formatMs(it) } ?: ""
+                    statusView.text = "Lap ${h.finished}  $last"
+                    if (voiceOn) voiceLocal.speak("Lap ${h.finished}")
+                    log("[LAP] finished #${h.finished} $last best=${h.bestMs?.let { LapTimer.formatMs(it) }}")
+                }
+                paintLapHud()
                 val alt = if (loc.hasAltitude()) loc.altitude else null
                 val dest = liveDest
                 if (liveMode == GpxSession.Mode.GPX && !gpxOriented && track != null) {
@@ -2912,6 +2975,7 @@ class GpxDashUi(
     fun release() {
         if (released) return
         released = true
+        lapTimer.stop()
         routeScope.cancel()
         // Only the PROJECTED dash owns the handlebar sinks (it sets them in bind()'s `if (projected)`
         // block). The phone-preview instance (projected=false) never sets them, so it must NOT clear

@@ -181,15 +181,29 @@ class AndroidAutoService : Service() {
             return
         }
         // Only park for a real Wi-Fi outage — a dash-only drop with Wi-Fi still up is the prober's job.
-        if (BikeWifi.currentNetwork == null) {
+        val apConnected = BikeWifi.currentNetwork != null
+        val p2pConnected = BikeWifiP2p.isConnected
+        val phoneHosted = BikeLink.onPhoneHostedTransport
+        if (!bikeTransportConnected(apConnected, p2pConnected, phoneHosted)) {
             if (AppSettings.keepWifiAfterDisconnect(this)) {
                 wifiDownSince = 0L
                 return
             }
             val now = System.currentTimeMillis()
-            if (wifiDownSince == 0L) wifiDownSince = now
+            if (wifiDownSince == 0L) {
+                wifiDownSince = now
+                LogBus.log(
+                    "[AA] bike transport unavailable (ap=$apConnected p2p=$p2pConnected " +
+                        "hosted=$phoneHosted) — starting grace",
+                )
+            }
             else if (now - wifiDownSince > GRACE_MS) parkAa()
         } else {
+            if (wifiDownSince != 0L) {
+                LogBus.log(
+                    "[AA] bike transport recovered (ap=$apConnected p2p=$p2pConnected hosted=$phoneHosted)",
+                )
+            }
             wifiDownSince = 0L
         }
     }
@@ -696,6 +710,14 @@ class AndroidAutoService : Service() {
     private fun onAaSessionEnded(userExit: Boolean) {
         if (!userExit) {
             LogBus.log("[AA] session dropped — receiver still listening for reconnect")
+            if (BikeLink.takeAaDropRetry()) {
+                LogBus.log("[AA] re-triggering self-mode after handshake drop")
+                try {
+                    dev.zanderp.opencfmoto.aa.AaSelfMode.trigger(this, log = LogBus::log)
+                } catch (e: Exception) {
+                    LogBus.log("[AA] drop re-trigger failed: $e")
+                }
+            }
             return
         }
         LogBus.log("[AA] user exited Android Auto — stopping projection to the dash")
@@ -769,6 +791,26 @@ class AndroidAutoService : Service() {
         private const val ERROR_COOLDOWN_MS = 20_000L  // min gap between re-arm attempts after ERROR
         private const val GRACE_MS = 180_000L          // SoftAP blinks; 60s was parking mid-ride
         private const val RESUME_STEADY_TIMEOUT_MS = 12_000L // wait for AA video before falling back
+
+        /**
+         * Is the bike's TRANSPORT up? Upstream 7e198ae added [p2pConnected] because a Wi-Fi Direct bike has
+         * no [BikeWifi.currentNetwork], so the old `currentNetwork == null` test parked a live dash at
+         * [GRACE_MS]. This fork reaches Android Auto on a THIRD transport with the same blind spot: the
+         * classic phone-hosted hotspot (`CfmotoConnect.joinPhoneHotspot`, which is the ONLY phone-hotspot
+         * route left on the AA path — the connection factory implements no AA hand-off, so `joinWifi`
+         * routes `gateOnAaSteady = true` past every factory branch). There the PHONE is the network: both
+         * `BikeWifi` and `BikeWifiP2p` stay false for the whole ride and a 180 s park was guaranteed.
+         *
+         * [phoneHosted] ([BikeLink.onPhoneHostedTransport]) is that case. It answers "up" because on that
+         * transport there is no Wi-Fi-layer outage to wait for at all: the link's own recovery (prober +
+         * [tickWatchdog]) owns it, exactly as the comment at the call site says. SoftAP and Wi-Fi Direct
+         * keep their own observable signals — a bike that really went away still parks.
+         */
+        internal fun bikeTransportConnected(
+            apConnected: Boolean,
+            p2pConnected: Boolean,
+            phoneHosted: Boolean,
+        ): Boolean = apConnected || p2pConnected || phoneHosted
 
         /** Intent extra: MainActivity should re-project on open (BAL-safe resume after a park). */
         const val EXTRA_RESUME = "dev.zanderp.opencfmoto.RESUME_PROJECTION"

@@ -13,8 +13,10 @@ android {
         }
     }
 
-    // Slim is the default ship shape: arm64-only + R8. Opt out with -PslimApk=false (fat debug/CI).
+    // Slim is the default ship shape: one ABI + R8. Opt out with -PslimApk=false (fat debug/CI).
+    // -Pabi=armeabi-v7a ships the 32-bit ARM APK for phones whose Android is still 32-bit.
     val slimApk = (project.findProperty("slimApk") as String?)?.equals("false", ignoreCase = true) != true
+    val abiFilter = (project.findProperty("abi") as String?)?.trim().orEmpty()
 
     defaultConfig {
         // This FORK ships under its own application id. Sharing upstream's (`dev.zanderp.opencfmoto`)
@@ -27,11 +29,14 @@ android {
         minSdk = 29
         targetSdk = 36
         // Optional build number (-PbuildNumber) bumps versionCode/versionName so a newer local build
-        // installs over an older one. Blank → the upstream base version (2.0.13-pre / 68 when synced
-        // with upstream/main).
+        // installs over an older one. Blank → the upstream base version (2.0.18 / 77 as of the
+        // 2026-09-16 sync with upstream/main). The override is NOT cosmetic: the owner's phone
+        // self-updates from the OTA feed built on the VM, and that feed keys on a strictly increasing
+        // versionCode — replacing this with upstream's flat literals would freeze that phone on
+        // whatever build it already has.
         val buildNumber = (project.findProperty("buildNumber") as String?)?.takeIf { it.isNotBlank() }
-        versionCode = buildNumber?.toIntOrNull() ?: 68
-        versionName = "2.0.13-pre" + (buildNumber?.let { ".$it" } ?: "")
+        versionCode = buildNumber?.toIntOrNull() ?: 77
+        versionName = "2.0.18" + (buildNumber?.let { ".$it" } ?: "")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -61,13 +66,17 @@ android {
         }.orElse("unknown")
         buildConfigField("String", "GIT_HASH", "\"${gitHash.get()}\"")
 
-        if (slimApk) {
+        if (slimApk || abiFilter.isNotEmpty()) {
             ndk {
-                abiFilters += listOf("arm64-v8a")
+                abiFilters += listOf(abiFilter.ifEmpty { "arm64-v8a" })
             }
         }
     }
 
+    // Upstream's b50e774 added a `debugRelease` signingConfig here that signs the release build with
+    // ~/.android/debug.keystore. NOT taken: that is exactly the Play-Protect block the comment below
+    // describes, and it would also re-sign our OTA builds with a key the owner's installed app does not
+    // trust (an install-time signature mismatch, not a warning). The fork keeps its own release key.
     // Release signing. A debug-signed APK trips Play Protect: the debug key ships with every Android
     // Studio install, and debug builds are `debuggable`. Upstream ships release-signed builds, which is
     // why theirs installs cleanly.

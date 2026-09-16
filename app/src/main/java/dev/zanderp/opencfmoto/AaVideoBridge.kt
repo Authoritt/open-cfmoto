@@ -17,6 +17,9 @@ object AaVideoBridge {
      */
     @Volatile var aaSessionLive: Boolean = false
 
+    /** True if an AAP session came up at least once this Connect (even if it later dropped). */
+    @Volatile var aaSessionSeen: Boolean = false
+
     /** True once we have decoded at least one AA video fps sample this session. */
     @Volatile var aaDecoding: Boolean = false
 

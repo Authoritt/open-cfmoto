@@ -34,6 +34,7 @@ import dev.zanderp.opencfmoto.GpxSession
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.MapInputBridge
 import dev.zanderp.opencfmoto.MatchAspectMode
+import dev.zanderp.opencfmoto.MirrorOrientationLock
 import dev.zanderp.opencfmoto.Phase
 import dev.zanderp.opencfmoto.PhoneHotspotAssist
 import dev.zanderp.opencfmoto.PhoneHotspotScan
@@ -207,6 +208,13 @@ object CfmotoConnect {
             ProjectionHolder.projection?.let { try { it.stop() } catch (_: Exception) {} }
             ProjectionHolder.projection = null
             try { ProjectionService.stop(context) } catch (_: Exception) {}
+            // Ported from upstream d6f84c2's MainActivity.tearDownForModeSwitch: this body moved here, so
+            // the orientation lock the mirror path applies must be released HERE too — left behind, the
+            // phone stays pinned to the dash's landscape after the rider leaves Mirror. The lock is a
+            // property of an ACTIVITY (requestedOrientation), so it only exists when this teardown was
+            // called with one; the headless caller (background auto-connect) never applied it, and
+            // [MirrorOrientationLock.clear] is a no-op without a saved orientation anyway.
+            (context as? Activity)?.let { MirrorOrientationLock.clear(it) }
         }
         if (clearMap) {
             try { GpxSession.clear() } catch (_: Exception) {}
@@ -927,7 +935,15 @@ object CfmotoConnect {
                 if (AaVideoBridge.aaSessionLive || AaVideoBridge.aaDecoding) return@postDelayed
                 // Still no AA after retries — stop thrashing (bike SoftAP may already be up).
                 LogBus.log("[AA] Android Auto never attached — stopping silent retry")
-                ConnectionState.set(Phase.ERROR, activity.getString(R.string.conn_detail_aa_not_started))
+                // Ported from upstream d3b1936's MainActivity.startAaFlow (this body moved here): an AAP
+                // session that ATTACHED and then died is a different rider instruction than one that never
+                // attached — [AaVideoBridge.aaSessionSeen] is what tells them apart.
+                val detail = if (AaVideoBridge.aaSessionSeen) {
+                    activity.getString(R.string.conn_detail_aa_dropped)
+                } else {
+                    activity.getString(R.string.conn_detail_aa_not_started)
+                }
+                ConnectionState.set(Phase.ERROR, detail)
             }, 18_000)
             // Kick off the Wi-Fi join right away, in parallel with AA boot.
             joinWifi(activity, qr, gateOnAaSteady = true, activity = activity)

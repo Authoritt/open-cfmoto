@@ -42,8 +42,11 @@ object SettingsBackup {
         val s = JSONObject()
         s.put("videoQuality", VideoPrefs.get(context).name)
         s.put("screenFit", VideoPrefs.fit(context).name)
+        s.put("mirrorOrientation", VideoPrefs.mirrorOrientation(context).name)
         s.put("powerMode", VideoPrefs.power(context).name)
         s.put("resolutionMode", VideoPrefs.resolution(context).name)
+        s.put("aaDpiOverride", VideoPrefs.dpiOverride(context) ?: 0)
+        s.put("remotePad", RemotePad.enabled(context))
         s.put("profileOverride", ProfilePrefs.get(context).id)
         s.put("controlAa", ButtonMode.isControlAa(context))
         // `controlAa` IS the handlebar switch now (inverted: true = drives the dash), so one key carries
@@ -124,12 +127,20 @@ object SettingsBackup {
         s.optString("screenFit").takeIf { it.isNotBlank() }?.let {
             runCatching { VideoPrefs.setFit(context, ScreenFit.valueOf(it)) }
         }
+        s.optString("mirrorOrientation").takeIf { it.isNotBlank() }?.let {
+            runCatching { VideoPrefs.setMirrorOrientation(context, MirrorOrientation.valueOf(it)) }
+        }
         s.optString("powerMode").takeIf { it.isNotBlank() }?.let {
             runCatching { VideoPrefs.setPower(context, PowerMode.valueOf(it)) }
         }
         s.optString("resolutionMode").takeIf { it.isNotBlank() }?.let {
             runCatching { VideoPrefs.setResolution(context, ResolutionMode.valueOf(it)) }
         }
+        if (s.has("aaDpiOverride")) {
+            val dpi = s.optInt("aaDpiOverride", 0)
+            VideoPrefs.setDpiOverride(context, dpi.takeIf { it > 0 })
+        }
+        if (s.has("remotePad")) RemotePad.setEnabled(context, s.optBoolean("remotePad"))
         if (s.has("profileOverride")) {
             ProfilePrefs.set(context, ProfileOverride.byId(s.optString("profileOverride")))
         }

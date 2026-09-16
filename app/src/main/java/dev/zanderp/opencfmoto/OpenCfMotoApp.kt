@@ -54,6 +54,10 @@ class OpenCfMotoApp : Application() {
         }
         CrashGuard.install(this)
         CrashGuard.hydrateLogBus(this)
+        try {
+            AppSettings.applyToHolder(this)
+        } catch (_: Exception) {
+        }
         // After hydrate so Share Logs still show prior crash, then stamp this process build.
         LogBus.logSessionBanner()
         AppHttp.init(this)
@@ -63,8 +67,8 @@ class OpenCfMotoApp : Application() {
         }
         try {
             MapLibre.getInstance(this)
-            // Pin MapLibre style/tile HTTP to cellular while the process is bound to bike Wi‑Fi.
-            org.maplibre.android.module.http.HttpRequestUtil.setOkHttpClient(AppHttp.mapLibreOkHttpClient())
+            // After getInstance only — AppHttp network callbacks must not set the client first.
+            AppHttp.onMapLibreReady()
         } catch (e: Exception) {
             android.util.Log.w("OpenCfMoto", "MapLibre init failed: $e")
         }

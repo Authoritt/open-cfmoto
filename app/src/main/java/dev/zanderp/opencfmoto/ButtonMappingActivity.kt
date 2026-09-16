@@ -5,6 +5,7 @@
 package dev.zanderp.opencfmoto
 
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.EditText
@@ -48,6 +49,9 @@ class ButtonMappingActivity : AppCompatActivity() {
             BluetoothHelper.openBluetoothSettings(this)
         }
         findViewById<MaterialButton>(R.id.btn_teach_handlebar).setOnClickListener { teachHandlebar() }
+        findViewById<MaterialButton>(R.id.remote_pad_on).setOnClickListener { setRemotePad(true) }
+        findViewById<MaterialButton>(R.id.remote_pad_off).setOnClickListener { setRemotePad(false) }
+        findViewById<MaterialButton>(R.id.btn_teach_remote).setOnClickListener { teachRemote() }
 
         findViewById<MaterialButton>(R.id.btn_overlay).setOnClickListener {
             try {
@@ -168,6 +172,88 @@ class ButtonMappingActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tv_bt_status).text = BluetoothHelper.status(this).shortLine()
         findViewById<TextView>(R.id.tv_presence).text =
             "Handlebar sources: ${ButtonPresencePrefs.summarize(this)}"
+        highlightOnOff(R.id.remote_pad_on, R.id.remote_pad_off, RemotePad.enabled(this))
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (RemotePad.consume(this, event)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onDestroy() {
+        if (RemotePad.teachListener != null) RemotePad.teachListener = null
+        super.onDestroy()
+    }
+
+    private fun setRemotePad(on: Boolean) {
+        RemotePad.setEnabled(this, on)
+        LogBus.log("→ remote pad ${if (on) "on" else "off"}")
+        refresh()
+        Toast.makeText(
+            this,
+            if (on) "Remote pad on — HID keys map to handlebar gestures"
+            else "Remote pad off",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    private fun teachRemote() {
+        if (!RemotePad.enabled(this)) {
+            Toast.makeText(this, "Turn remote pad on first", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val gestures = ButtonGesture.entries
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.buttons_teach_remote_pick)
+            .setItems(gestures.map { it.label }.toTypedArray()) { _, which ->
+                waitForRemoteKey(gestures[which])
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun waitForRemoteKey(gesture: ButtonGesture) {
+        val dlg = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.buttons_teach_remote_wait)
+            .setMessage(gesture.label)
+            .setNegativeButton(android.R.string.cancel) { _, _ -> RemotePad.teachListener = null }
+            .setOnDismissListener { RemotePad.teachListener = null }
+            .create()
+        RemotePad.teachListener = listen@{ ev ->
+            if (ev.device?.isVirtual == true) return@listen false
+            if (ev.action == KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
+                RemotePad.teach(this, ev.keyCode, gesture)
+                RemotePad.teachListener = null
+                dlg.dismiss()
+                Toast.makeText(
+                    this,
+                    getString(
+                        R.string.buttons_teach_remote_ok,
+                        KeyEvent.keyCodeToString(ev.keyCode),
+                        gesture.label,
+                    ),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                LogBus.log("→ remote pad teach: ${KeyEvent.keyCodeToString(ev.keyCode)} → ${gesture.label}")
+            }
+            true
+        }
+        dlg.show()
+    }
+
+    private fun highlightOnOff(onId: Int, offId: Int, on: Boolean) {
+        val onColor = androidx.core.content.ContextCompat.getColor(this, R.color.brand_orange)
+        val onText = androidx.core.content.ContextCompat.getColor(this, R.color.on_brand)
+        val offColor = androidx.core.content.ContextCompat.getColor(this, R.color.surface_high)
+        val offText = androidx.core.content.ContextCompat.getColor(this, R.color.text_primary)
+        listOf(onId to true, offId to false).forEach { (id, value) ->
+            val btn = findViewById<MaterialButton>(id)
+            val selected = value == on
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(
+                if (selected) onColor else offColor,
+            )
+            btn.setTextColor(if (selected) onText else offText)
+        }
     }
 
     private fun teachHandlebar() {

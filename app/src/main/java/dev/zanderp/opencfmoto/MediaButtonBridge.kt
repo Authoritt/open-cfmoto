@@ -1132,6 +1132,14 @@ class MediaButtonBridge(private val context: Context, private val log: (String) 
         @Volatile var instance: MediaButtonBridge? = null
             private set
 
+        fun injectGesture(gesture: ButtonGesture) {
+            instance?.let { b -> b.handler.post { b.run(gesture) } }
+        }
+
+        fun injectAction(action: ButtonAction) {
+            instance?.let { b -> b.handler.post { b.perform(action) } }
+        }
+
         /**
          * Music volume for the Controls slider — works even before AA starts (plain [AudioManager]).
          * While the bridge is capturing handlebar volume for nav, updates go through

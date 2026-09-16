@@ -8,6 +8,8 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Handler
+import android.os.Looper
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 import java.io.IOException
@@ -44,6 +46,8 @@ object AppHttp {
     @Volatile private var heldCellular: Network? = null
     private var cellularCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var mapLibreClient: OkHttpClient? = null
+    @Volatile private var mapLibreReady = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     /** Called once from [OpenCfMotoApp] so we can reach an internet-capable network while riding. */
     fun init(ctx: Context) {
@@ -63,13 +67,14 @@ object AppHttp {
             override fun onAvailable(network: Network) {
                 heldCellular = network
                 LogBus.log("[NET] cellular/internet uplink available for map/routing")
-                rebuildMapLibreClient()
+                // ConnectivityThread — do not touch MapLibre here (FATAL on 2.0.17/18).
+                applyMapLibreClientAsync()
             }
 
             override fun onLost(network: Network) {
                 if (heldCellular == network) heldCellular = null
                 LogBus.log("[NET] cellular/internet uplink lost")
-                rebuildMapLibreClient()
+                applyMapLibreClientAsync()
             }
         }
         cellularCallback = cb
@@ -169,10 +174,31 @@ object AppHttp {
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
     }
 
+    /**
+     * Call after [org.maplibre.android.MapLibre.getInstance]. Network callbacks must not
+     * [org.maplibre.android.module.http.HttpRequestUtil.setOkHttpClient] before that — it
+     * crashed 2.0.17/18 (`onAvailable` → MapLibre HTTP).
+     */
+    fun onMapLibreReady() {
+        mapLibreReady = true
+        applyMapLibreClientAsync()
+    }
+
     /** OkHttp client for MapLibre style/tile fetches, pinned to the same uplink as [openUrl]. */
     fun mapLibreOkHttpClient(): OkHttpClient {
         mapLibreClient?.let { return it }
         return rebuildMapLibreClient()
+    }
+
+    private fun applyMapLibreClientAsync() {
+        if (!mapLibreReady) return
+        mainHandler.post {
+            try {
+                rebuildMapLibreClient()
+            } catch (t: Throwable) {
+                LogBus.log("[NET] MapLibre HTTP client apply failed: $t")
+            }
+        }
     }
 
     @Synchronized
@@ -197,9 +223,12 @@ object AppHttp {
         }
         val client = builder.build()
         mapLibreClient = client
-        try {
-            org.maplibre.android.module.http.HttpRequestUtil.setOkHttpClient(client)
-        } catch (_: Exception) {
+        if (mapLibreReady) {
+            try {
+                org.maplibre.android.module.http.HttpRequestUtil.setOkHttpClient(client)
+            } catch (t: Throwable) {
+                LogBus.log("[NET] MapLibre setOkHttpClient failed: $t")
+            }
         }
         return client
     }
