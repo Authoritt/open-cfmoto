@@ -20,6 +20,7 @@ Draft locales ship for Discord community languages:
 | `values-hu/` | Magyar |
 | `values-tr/` | Türkçe |
 | `values-ko/` | 한국어 |
+| `values-bg/` | Български (sashop2001) |
 
 ## How to improve a translation
 

@@ -152,8 +152,7 @@ object BikeWifi {
             this.onAvailableCb = onAvailable
             this.onLostCb = onLost
             this.logCb = log
-            rebindProcessToBike(context)
-            log("Wi-Fi already bound: $ssid — skipping re-join (mode switch)")
+            log("Wi-Fi already joined: $ssid — skipping re-join (mode switch)")
             onAvailable(net)
             return
         }
@@ -168,14 +167,16 @@ object BikeWifi {
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 currentNetwork = network
-                cm.bindProcessToNetwork(network)
-                // Keep cellular requested so map/routing can pin off the bike AP (no uplink).
+                // Do not bindProcessToNetwork here. Binding the process to the bike AP removes
+                // the 127.0.0.1 route (AaReceiver.connectLoopback). That dropped AA ~500ms after
+                // a successful handshake on DIRECT-go-CFMOTO / 800NK before video went steady.
+                // [BikeLink] / [EasyConnProber] call [rebindProcessToBike] when PXC actually starts.
                 AppHttp.ensureCellularUplink()
                 rejoinAttempts = 0
                 logLinkOnce(network)
                 if (!firstDelivered) {
                     firstDelivered = true
-                    logCb?.invoke("Wi-Fi joined: $ssid (network=$network, bound)")
+                    logCb?.invoke("Wi-Fi joined: $ssid (network=$network, bind deferred until AA video)")
                     onAvailableCb?.invoke(network)
                 } else {
                     logCb?.invoke("Wi-Fi re-acquired: $ssid — restarting bike link on fresh network")

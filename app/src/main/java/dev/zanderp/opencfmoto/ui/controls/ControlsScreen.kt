@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,7 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.AaVideoBridge
-import dev.zanderp.opencfmoto.HandlebarVolumeMode
+import dev.zanderp.opencfmoto.HandlebarAudioMode
 import dev.zanderp.opencfmoto.MapInputBridge
 import dev.zanderp.opencfmoto.MediaButtonBridge
 import dev.zanderp.opencfmoto.aa.AaInput
@@ -56,7 +58,7 @@ fun ControlsScreen(nav: NavController) {
     val ctx = LocalContext.current
     val maxVol = remember { MediaButtonBridge.volumeLevels(ctx).second.coerceAtLeast(1) }
     var vol by remember { mutableFloatStateOf(MediaButtonBridge.volumeLevels(ctx).first.toFloat()) }
-    var navMode by remember { mutableStateOf(HandlebarVolumeMode.isNavigate(ctx)) }
+    var audioMode by remember { mutableStateOf(HandlebarAudioMode.isAudio(ctx)) }
 
     fun key(code: Int) {
         val sink = MapInputBridge.keySink ?: AaVideoBridge.keySink
@@ -103,14 +105,27 @@ fun ControlsScreen(nav: NavController) {
             colors = SliderDefaults.colors(thumbColor = c.ignition, activeTrackColor = c.ignition),
         )
 
-        // ▲/▼ mode toggle
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(11.dp)).background(c.groundHi).border(1.dp, c.line, RoundedCornerShape(11.dp)).padding(3.dp)) {
-            SegOption("▲▼ " + stringResource(R.string.ovk_volume), selected = !navMode, Modifier.weight(1f)) {
-                HandlebarVolumeMode.set(ctx, false); navMode = false
+        // The ONE handlebar switch. There used to be two toggles here plus an invisible auto-guess, and
+        // between them the rider's choice could end up meaning nothing. Off = the bars drive the dash.
+        Row(
+            Modifier.fillMaxWidth().padding(top = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.ovk_handlebar_audio), color = c.ink, fontSize = 13.sp)
+                Text(
+                    stringResource(
+                        if (audioMode) R.string.ovk_handlebar_audio_on else R.string.ovk_handlebar_audio_off,
+                    ),
+                    color = c.inkDim,
+                    fontSize = 11.sp,
+                )
             }
-            SegOption("▲▼ " + stringResource(R.string.ovk_navigate), selected = navMode, Modifier.weight(1f)) {
-                HandlebarVolumeMode.set(ctx, true); navMode = true
-            }
+            Switch(
+                checked = audioMode,
+                onCheckedChange = { on -> HandlebarAudioMode.setAudio(ctx, on); audioMode = on },
+                colors = SwitchDefaults.colors(checkedTrackColor = c.live),
+            )
         }
 
         // Voice / Home / Back

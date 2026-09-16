@@ -1,19 +1,54 @@
 package dev.zanderp.opencfmoto
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.util.TimeZone
 
 class HuQueryTimeTest {
+    private val now = 1_786_272_219_244L
+    private val madrid = TimeZone.getTimeZone("Europe/Madrid")
+
     @Test
-    fun ack_isCarbitJson_dayFirstWithMillis() {
-        val zone = TimeZone.getTimeZone("Europe/Rome")
-        val now = 1_786_272_219_244L
-        val ack = HuQueryTime.ack(now, zone)
+    fun otherChannelsStayNull() {
+        assertNull(HuQueryTime.ackIfZontes(null, now, madrid))
+        assertNull(HuQueryTime.ackIfZontes("", now, madrid))
+        assertNull(HuQueryTime.ackIfZontes("21312", now, madrid))
+        assertNull(HuQueryTime.ackIfZontes("66660742", now, madrid))
+    }
+
+    @Test
+    fun zontesChannelAddsOemFields() {
+        val ack = HuQueryTime.ackIfZontes(" 21340 ", now, madrid)!!
+        val body = String(ack.payload, Charsets.UTF_8)
+        val currentTime = now + madrid.getOffset(now)
+        assertEquals(
+            "{\"time\":$now,\"currentTime\":$currentTime," +
+                "\"currentTimeZone\":\"Europe/Madrid\",\"dateTime\":\"09.08.2026 12:43:39:244\"}",
+            body,
+        )
+        assertEquals("09.08.2026 12:43:39:244", ack.dateTime)
+        assertEquals(currentTime, ack.currentTime)
+        assertEquals("Europe/Madrid", ack.timeZone)
+    }
+
+    @Test
+    fun carbitOmitsZontesFields() {
+        val ack = HuQueryTime.carbit(now, madrid)
         val body = String(ack.payload, Charsets.UTF_8)
         assertEquals("{\"time\":$now,\"dateTime\":\"09.08.2026 12:43:39:244\"}", body)
         assertEquals("09.08.2026 12:43:39:244", ack.dateTime)
-        assertTrue(ack.payload.isNotEmpty())
+    }
+
+    @Test
+    fun zontesOemIgnoresChannel() {
+        val ack = HuQueryTime.zontesOem(now, madrid)
+        val body = String(ack.payload, Charsets.UTF_8)
+        val currentTime = now + madrid.getOffset(now)
+        assertEquals(
+            "{\"time\":$now,\"currentTime\":$currentTime," +
+                "\"currentTimeZone\":\"Europe/Madrid\",\"dateTime\":\"09.08.2026 12:43:39:244\"}",
+            body,
+        )
     }
 }

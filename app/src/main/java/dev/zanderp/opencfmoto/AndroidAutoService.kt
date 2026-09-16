@@ -8,6 +8,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import androidx.core.content.ContextCompat
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -36,6 +37,12 @@ class AndroidAutoService : Service() {
     private var pipeline: VideoPipeline? = null
     private var receiver: AaReceiver? = null
     private var mediaButtons: MediaButtonBridge? = null
+
+    /** Armed when the handlebar bridge had to be skipped, so it can start the moment Bluetooth is on. */
+    private var btWatcher: android.content.BroadcastReceiver? = null
+
+    /** One rider-facing warning per service life — not one per reconnect attempt. */
+    private var handlebarWarned = false
     private var wakeLock: PowerManager.WakeLock? = null
     /** Dim screen wake while GPX Presentation is up (VirtualDisplay stalls if the phone sleeps hard). */
     private var screenWakeLock: PowerManager.WakeLock? = null
@@ -174,15 +181,29 @@ class AndroidAutoService : Service() {
             return
         }
         // Only park for a real Wi-Fi outage — a dash-only drop with Wi-Fi still up is the prober's job.
-        if (BikeWifi.currentNetwork == null) {
+        val apConnected = BikeWifi.currentNetwork != null
+        val p2pConnected = BikeWifiP2p.isConnected
+        val phoneHosted = BikeLink.onPhoneHostedTransport
+        if (!bikeTransportConnected(apConnected, p2pConnected, phoneHosted)) {
             if (AppSettings.keepWifiAfterDisconnect(this)) {
                 wifiDownSince = 0L
                 return
             }
             val now = System.currentTimeMillis()
-            if (wifiDownSince == 0L) wifiDownSince = now
+            if (wifiDownSince == 0L) {
+                wifiDownSince = now
+                LogBus.log(
+                    "[AA] bike transport unavailable (ap=$apConnected p2p=$p2pConnected " +
+                        "hosted=$phoneHosted) — starting grace",
+                )
+            }
             else if (now - wifiDownSince > GRACE_MS) parkAa()
         } else {
+            if (wifiDownSince != 0L) {
+                LogBus.log(
+                    "[AA] bike transport recovered (ap=$apConnected p2p=$p2pConnected hosted=$phoneHosted)",
+                )
+            }
             wifiDownSince = 0L
         }
     }
@@ -301,6 +322,12 @@ class AndroidAutoService : Service() {
         try {
             if (on) {
                 reacquireLocks() // CPU + Wi‑Fi locks — screen-off must not stall the map pipeline
+                // Own-map projection routes the handlebar (AVRCP) through [MediaButtonBridge] → the map
+                // sinks. setGpxScreenWake() short-circuits straight here when the FGS is ALREADY up
+                // (e.g. a lingering post-onTaskRemoved service, or an AA→Map switch), skipping the
+                // onStartCommand(ACTION_GPX_WAKE) path that would otherwise start the bridge — so start
+                // it here too. Idempotent (no-op once running) and gated on BT, so AA is unaffected.
+                ensureMediaButtons()
                 if (screenWakeLock?.isHeld == true) return
                 val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
                 @Suppress("DEPRECATION")
@@ -530,12 +557,84 @@ class AndroidAutoService : Service() {
 
     /** Keep AVRCP capture alive for AA and for Map (same ButtonMap presets). */
     private fun ensureMediaButtons() {
-        if (mediaButtons != null) return
+        // Already running: do not rebuild it, but DO re-decide who owns the handlebar. This path is hit
+        // when the map starts projecting after the bridge was created (AA→Map switch, or a lingering
+        // FGS), and that decision is what routes ▲/▼ to the dash instead of the phone's volume.
+        mediaButtons?.let { it.refreshCapturePolicy(); return }
         if (!canCaptureHandlebarButtons()) {
+            // Bluetooth off (or CONNECT not granted) at this instant. This used to just log and give
+            // up FOREVER: nothing re-ran this, so a rider who turned Bluetooth on afterwards got a
+            // dead handlebar and ▲/▼ fell through to plain phone volume — reported from the bike as
+            // "I turned Bluetooth on and the rocker still drives my phone's volume". Now we say it out
+            // loud and arm a watcher so the bridge starts the moment Bluetooth comes up.
+            val why = if (!BluetoothHelper.hasConnectPermission(applicationContext)) {
+                R.string.ovk_btn_needs_bt_permission
+            } else {
+                R.string.ovk_btn_needs_bt_on
+            }
             LogBus.log("[BTN] skipped — Bluetooth off or no Nearby/BLUETOOTH_CONNECT (no focus/volume hijack)")
+            notifyHandlebarUnavailable(why)
+            watchBluetoothForButtons()
             return
         }
         mediaButtons = MediaButtonBridge(applicationContext, LogBus::log).also { it.start() }
+        LogBus.log("[BTN] handlebar bridge started (▲/▼ drive the dash, not phone volume)")
+        // Bluetooth ON is not the same as the BIKE being connected to it, and the difference is invisible
+        // from the saddle: on 2026-08-20 the rider turned Bluetooth on, closed and reopened the app
+        // several times, and the handlebar stayed dead — because the dash never connected
+        // (`connectedMac=null` all session). Say so, instead of letting him hunt for it.
+        if (!BluetoothHelper.status(applicationContext).connected) {
+            LogBus.log("[BTN] Bluetooth is on but NO device is connected — the handlebar has no path to the phone yet")
+            notifyHandlebarUnavailable(R.string.ovk_btn_bike_not_connected)
+        }
+    }
+
+    /** Tell the RIDER, once per service life — a silent log is why this went unnoticed on the bike. */
+    private fun notifyHandlebarUnavailable(msgRes: Int) {
+        if (handlebarWarned) return
+        handlebarWarned = true
+        val text = getString(msgRes)
+        ConnectionState.set(ConnectionState.phase, text)
+        watchdogHandler.post {
+            try {
+                android.widget.Toast.makeText(applicationContext, text, android.widget.Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Start the handlebar bridge as soon as Bluetooth turns on. Registered only when we actually had
+     * to skip, and torn down in [onDestroy]; [ensureMediaButtons] is idempotent, so a duplicate
+     * broadcast costs nothing.
+     */
+    private fun watchBluetoothForButtons() {
+        if (btWatcher != null) return
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: android.content.Intent?) {
+                if (i?.action != android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED) return
+                val state = i.getIntExtra(
+                    android.bluetooth.BluetoothAdapter.EXTRA_STATE,
+                    android.bluetooth.BluetoothAdapter.ERROR,
+                )
+                if (state == android.bluetooth.BluetoothAdapter.STATE_ON) {
+                    LogBus.log("[BTN] Bluetooth came on — starting the handlebar bridge now")
+                    ensureMediaButtons()
+                }
+            }
+        }
+        btWatcher = r
+        try {
+            ContextCompat.registerReceiver(
+                this,
+                r,
+                android.content.IntentFilter(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        } catch (e: Exception) {
+            LogBus.log("[BTN] could not watch Bluetooth state: $e")
+            btWatcher = null
+        }
     }
 
     /** Handlebar bridge needs BT on + CONNECT (API 31+); otherwise it fights phone media for nothing. */
@@ -611,6 +710,14 @@ class AndroidAutoService : Service() {
     private fun onAaSessionEnded(userExit: Boolean) {
         if (!userExit) {
             LogBus.log("[AA] session dropped — receiver still listening for reconnect")
+            if (BikeLink.takeAaDropRetry()) {
+                LogBus.log("[AA] re-triggering self-mode after handshake drop")
+                try {
+                    dev.zanderp.opencfmoto.aa.AaSelfMode.trigger(this, log = LogBus::log)
+                } catch (e: Exception) {
+                    LogBus.log("[AA] drop re-trigger failed: $e")
+                }
+            }
             return
         }
         LogBus.log("[AA] user exited Android Auto — stopping projection to the dash")
@@ -656,6 +763,8 @@ class AndroidAutoService : Service() {
         try { TripAutoLog.sync(this) } catch (_: Exception) {}
         try { mediaButtons?.stop() } catch (_: Exception) {}
         mediaButtons = null
+        try { btWatcher?.let { unregisterReceiver(it) } } catch (_: Exception) {}
+        btWatcher = null
         try { receiver?.stop() } catch (_: Exception) {}
         receiver = null
         AaVideoBridge.pipeline = null
@@ -682,6 +791,26 @@ class AndroidAutoService : Service() {
         private const val ERROR_COOLDOWN_MS = 20_000L  // min gap between re-arm attempts after ERROR
         private const val GRACE_MS = 180_000L          // SoftAP blinks; 60s was parking mid-ride
         private const val RESUME_STEADY_TIMEOUT_MS = 12_000L // wait for AA video before falling back
+
+        /**
+         * Is the bike's TRANSPORT up? Upstream 7e198ae added [p2pConnected] because a Wi-Fi Direct bike has
+         * no [BikeWifi.currentNetwork], so the old `currentNetwork == null` test parked a live dash at
+         * [GRACE_MS]. This fork reaches Android Auto on a THIRD transport with the same blind spot: the
+         * classic phone-hosted hotspot (`CfmotoConnect.joinPhoneHotspot`, which is the ONLY phone-hotspot
+         * route left on the AA path — the connection factory implements no AA hand-off, so `joinWifi`
+         * routes `gateOnAaSteady = true` past every factory branch). There the PHONE is the network: both
+         * `BikeWifi` and `BikeWifiP2p` stay false for the whole ride and a 180 s park was guaranteed.
+         *
+         * [phoneHosted] ([BikeLink.onPhoneHostedTransport]) is that case. It answers "up" because on that
+         * transport there is no Wi-Fi-layer outage to wait for at all: the link's own recovery (prober +
+         * [tickWatchdog]) owns it, exactly as the comment at the call site says. SoftAP and Wi-Fi Direct
+         * keep their own observable signals — a bike that really went away still parks.
+         */
+        internal fun bikeTransportConnected(
+            apConnected: Boolean,
+            p2pConnected: Boolean,
+            phoneHosted: Boolean,
+        ): Boolean = apConnected || p2pConnected || phoneHosted
 
         /** Intent extra: MainActivity should re-project on open (BAL-safe resume after a park). */
         const val EXTRA_RESUME = "dev.zanderp.opencfmoto.RESUME_PROJECTION"

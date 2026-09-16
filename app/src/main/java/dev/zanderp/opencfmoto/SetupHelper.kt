@@ -46,6 +46,22 @@ object SetupHelper {
     /** Full first-run checklist (Setup screen). */
     fun requiredPermissions(): List<String> = (connectPermissions() + scanPermissions()).distinct()
 
+    /**
+     * `NEARBY_WIFI_DEVICES` on Android 13+ — the grant the two Wi-Fi Direct connectors (BLE / P2P) cannot
+     * work without. Empty below API 33, where the permission does not exist as a runtime grant.
+     *
+     * Deliberately NOT part of [requiredPermissions]: it is not required to ride a SoftAP bike, so it must
+     * never turn the setup checklist red (nor push anyone into onboarding) for riders who will never need
+     * it. Its real home is pairing — `ui/scan/ScanScreen` asks for it when the bike's connector actually
+     * uses Wi-Fi Direct — and [onboardingPermissions] simply lets first-run get it out of the way in the
+     * same batch as the rest.
+     */
+    fun wifiDirectPermissions(): List<String> =
+        if (NearbyDevices.required()) listOf(NearbyDevices.PERMISSION) else emptyList()
+
+    /** What the first-run flows ASK for: the checklist plus the optional Wi-Fi Direct grant. */
+    fun onboardingPermissions(): List<String> = (requiredPermissions() + wifiDirectPermissions()).distinct()
+
     fun missingPermissions(ctx: Context): List<String> = requiredPermissions().filter {
         ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED
     }

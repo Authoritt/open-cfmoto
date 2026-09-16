@@ -3,13 +3,33 @@
 // Part of OpenCfMoto. Free software under the GNU AGPL v3 or later; see LICENSE and NOTICE.
 package dev.zanderp.opencfmoto
 
+import android.app.Activity
 import android.app.Application
+import android.app.Application.ActivityLifecycleCallbacks
+import android.os.Bundle
+import dev.zanderp.opencfmoto.connection.factory.DefaultPlatformIO
 import org.maplibre.android.MapLibre
 
 /** Process entry — installs crash capture before any Activity runs. */
 class OpenCfMotoApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // Bike-connection-factory platform seam (connection.factory.PlatformIO — used by the factory route,
+        // taken by the cockpit's own connect (joinWifi preferFactory=true) + the Rieju phone-hotspot path). install()
+        // gives it the application Context; the lifecycle
+        // callbacks feed activityOrNull() the current foreground Activity from ONE place — no per-Activity
+        // onResume/onPause overrides — so it tracks CockpitActivity, the classic MainActivity, or any
+        // future Activity uniformly.
+        DefaultPlatformIO.install(this)
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityResumed(activity: Activity) = DefaultPlatformIO.onActivityResumed(activity)
+            override fun onActivityPaused(activity: Activity) = DefaultPlatformIO.onActivityPaused(activity)
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityStarted(activity: Activity) {}
+            override fun onActivityStopped(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
         // Overtake library injection seams (Stage 0b of the map-subsystem extraction). Installed first,
         // before any map/routing/search code runs, so: (1) the library's deliberately-silent failures
         // forward into our single-session LogBus, and (2) its HTTP pins to the SAME validated (cellular)
@@ -34,6 +54,10 @@ class OpenCfMotoApp : Application() {
         }
         CrashGuard.install(this)
         CrashGuard.hydrateLogBus(this)
+        try {
+            AppSettings.applyToHolder(this)
+        } catch (_: Exception) {
+        }
         // After hydrate so Share Logs still show prior crash, then stamp this process build.
         LogBus.logSessionBanner()
         AppHttp.init(this)
@@ -43,8 +67,8 @@ class OpenCfMotoApp : Application() {
         }
         try {
             MapLibre.getInstance(this)
-            // Pin MapLibre style/tile HTTP to cellular while the process is bound to bike Wi‑Fi.
-            org.maplibre.android.module.http.HttpRequestUtil.setOkHttpClient(AppHttp.mapLibreOkHttpClient())
+            // After getInstance only — AppHttp network callbacks must not set the client first.
+            AppHttp.onMapLibreReady()
         } catch (e: Exception) {
             android.util.Log.w("OpenCfMoto", "MapLibre init failed: $e")
         }

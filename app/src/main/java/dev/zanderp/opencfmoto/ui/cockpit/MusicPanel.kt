@@ -40,6 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.zanderp.opencfmoto.R
+import android.content.ComponentName
+import android.os.Build
+import dev.zanderp.opencfmoto.cockpit.NowPlayingListener
 import dev.zanderp.opencfmoto.cockpit.NowPlaying
 import dev.zanderp.opencfmoto.cockpit.NowPlayingState
 import dev.zanderp.opencfmoto.ui.components.MonoLabel
@@ -91,8 +94,23 @@ private fun ColumnScope.NoAccess(ctx: Context) {
         modifier = Modifier.fillMaxWidth(),
     )
     PillButton(stringResource(R.string.ovk_music_grant_access)) {
-        // Deep-link straight to the Notification access screen so the rider can flip the grant.
-        runCatching { ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+        // Land ON our own switch, not in the haystack. ACTION_NOTIFICATION_LISTENER_SETTINGS opens the
+        // full list of every app on the phone and leaves the rider hunting for ours ("me manda a buscar
+        // la app"). Android 11+ has a DETAIL screen that takes a component and opens exactly that entry;
+        // older versions only have the list, so it stays as the fallback — as does a failure to resolve
+        // the detail screen, which some OEM Settings replace.
+        val direct = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).putExtra(
+                Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                ComponentName(ctx, NowPlayingListener::class.java).flattenToString(),
+            )
+        } else {
+            null
+        }
+        val opened = direct != null && runCatching { ctx.startActivity(direct) }.isSuccess
+        if (!opened) {
+            runCatching { ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+        }
     }
     Spacer(Modifier.weight(1f))
 }

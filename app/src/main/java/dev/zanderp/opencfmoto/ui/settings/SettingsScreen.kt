@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Settings — grouped, not a wall of options. Home of what left the dashboard: the default mode,
-// map provider, auto-connect, the hidden developer mode, and telemetry (off by default).
+// auto-connect, the hidden developer mode, and telemetry (off by default). Map PROVIDER is Garage-owned
+// per bike (config-ownership design doc §2) — no global selector here, only the renderer style tunable.
 package dev.zanderp.opencfmoto.ui.settings
 
 import android.app.Activity
@@ -60,7 +61,6 @@ import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
 import dev.zanderp.opencfmoto.settings.AppMode
 import dev.zanderp.opencfmoto.settings.DashRenderer
-import dev.zanderp.opencfmoto.settings.MapProvider
 import dev.zanderp.opencfmoto.settings.SettingsStore
 import dev.zanderp.opencfmoto.settings.ThemeMode
 import dev.zanderp.opencfmoto.ui.CockpitActivity
@@ -78,7 +78,6 @@ fun SettingsScreen(nav: NavController) {
     val store = remember { SettingsStore(ctx.applicationContext) }
     val scope = rememberCoroutineScope()
     val mode by store.defaultMode.collectAsStateWithLifecycle(initialValue = AppMode.CFMOTO)
-    val provider by store.mapProvider.collectAsStateWithLifecycle(initialValue = MapProvider.BUILTIN)
     val renderer by store.dashRenderer.collectAsStateWithLifecycle(initialValue = DashRenderer.MAPLIBRE)
     val theme by store.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.AUTO)
     val dev by store.developerMode.collectAsStateWithLifecycle(initialValue = false)
@@ -112,9 +111,9 @@ fun SettingsScreen(nav: NavController) {
             ValueRow(stringResource(R.string.ovk_settings_default_mode), modeLabel(mode), first = true) {
                 scope.launch { store.setDefaultMode(if (mode == AppMode.CFMOTO) AppMode.ANDROID_AUTO else AppMode.CFMOTO) }
             }
-            ValueRow(stringResource(R.string.ovk_settings_map_provider), providerLabel(ctx, provider)) {
-                scope.launch { store.setMapProvider(nextProvider(provider)) }
-            }
+            // Map PROVIDER is Garage-owned per bike (config-ownership design doc §2, Task 8) — no global
+            // selector here. The renderer stays here: it is a style tunable (how the built-in map draws),
+            // not "which map", so it is not per-bike.
             ValueRow(stringResource(R.string.ovk_settings_dash_renderer), rendererLabel(ctx, renderer)) {
                 scope.launch { store.setDashRenderer(nextRenderer(renderer)) }
             }
@@ -162,6 +161,8 @@ fun SettingsScreen(nav: NavController) {
                     val msg = MapLibreVdProbe.toggle(ctx)
                     Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                 }
+                // (The old SoftAP/P2P "new connection engine" A/B toggle was removed: the connection factory
+                //  is now the cockpit's own path via joinWifi(preferFactory=true), not a global dev switch.)
             }
         }
         Group(stringResource(R.string.ovk_settings_group_about)) {
@@ -219,15 +220,6 @@ private tailrec fun Context.unwrapActivity(): Activity? = when (this) {
 }
 
 private fun modeLabel(m: AppMode) = if (m == AppMode.CFMOTO) "CFMOTO" else "Android Auto"
-// Brand names stay literal; only the MIRROR ("Espejo") label is translated.
-private fun providerLabel(ctx: Context, p: MapProvider) = when (p) {
-    MapProvider.BUILTIN -> "Overtake"; MapProvider.GOOGLE -> "Google Maps"; MapProvider.WAZE -> "Waze"
-    MapProvider.MIRROR -> ctx.getString(R.string.ovk_provider_mirror)
-}
-private fun nextProvider(p: MapProvider) = when (p) {
-    MapProvider.BUILTIN -> MapProvider.GOOGLE; MapProvider.GOOGLE -> MapProvider.WAZE
-    MapProvider.WAZE -> MapProvider.MIRROR; MapProvider.MIRROR -> MapProvider.BUILTIN
-}
 // Dash render engine for the built-in map (Overtake). MapLibre = vector + 3D (default, proven clean
 // on the bike VD → H.264 path); osmdroid = classic raster; Mapsforge = offline vector (Canvas,
 // screen-off). Owner's cycle order: MapLibre → osmdroid → Mapsforge. Brand names stay literal.

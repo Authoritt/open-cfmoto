@@ -1,4 +1,6 @@
-﻿plugins {
+﻿import java.util.Properties
+
+plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
 }
@@ -11,19 +13,30 @@ android {
         }
     }
 
-    // Slim is the default ship shape: arm64-only + R8. Opt out with -PslimApk=false (fat debug/CI).
+    // Slim is the default ship shape: one ABI + R8. Opt out with -PslimApk=false (fat debug/CI).
+    // -Pabi=armeabi-v7a ships the 32-bit ARM APK for phones whose Android is still 32-bit.
     val slimApk = (project.findProperty("slimApk") as String?)?.equals("false", ignoreCase = true) != true
+    val abiFilter = (project.findProperty("abi") as String?)?.trim().orEmpty()
 
     defaultConfig {
-        applicationId = "dev.zanderp.opencfmoto"
+        // This FORK ships under its own application id. Sharing upstream's (`dev.zanderp.opencfmoto`)
+        // while signing with our own key is the signature of a repackaged app, and Google Play Protect
+        // hard-blocks it ("app blocked to protect your device", with no "install anyway"). It is also
+        // simply not ours to use. `namespace` stays on the upstream package so the code/imports and the
+        // diff against upstream are untouched — only the INSTALL identity changes, which also lets this
+        // build sit alongside the original app instead of replacing it.
+        applicationId = "dev.authoritforge.opencfmoto"
         minSdk = 29
         targetSdk = 36
         // Optional build number (-PbuildNumber) bumps versionCode/versionName so a newer local build
-        // installs over an older one. Blank → the upstream base version (2.0.13-pre / 68 when synced
-        // with upstream/main).
+        // installs over an older one. Blank → the upstream base version (2.0.18 / 77 as of the
+        // 2026-09-16 sync with upstream/main). The override is NOT cosmetic: the owner's phone
+        // self-updates from the OTA feed built on the VM, and that feed keys on a strictly increasing
+        // versionCode — replacing this with upstream's flat literals would freeze that phone on
+        // whatever build it already has.
         val buildNumber = (project.findProperty("buildNumber") as String?)?.takeIf { it.isNotBlank() }
-        versionCode = buildNumber?.toIntOrNull() ?: 68
-        versionName = "2.0.13-pre" + (buildNumber?.let { ".$it" } ?: "")
+        versionCode = buildNumber?.toIntOrNull() ?: 77
+        versionName = "2.0.18" + (buildNumber?.let { ".$it" } ?: "")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -53,9 +66,44 @@ android {
         }.orElse("unknown")
         buildConfigField("String", "GIT_HASH", "\"${gitHash.get()}\"")
 
-        if (slimApk) {
+        if (slimApk || abiFilter.isNotEmpty()) {
             ndk {
-                abiFilters += listOf("arm64-v8a")
+                abiFilters += listOf(abiFilter.ifEmpty { "arm64-v8a" })
+            }
+        }
+    }
+
+    // Upstream's b50e774 added a `debugRelease` signingConfig here that signs the release build with
+    // ~/.android/debug.keystore. NOT taken: that is exactly the Play-Protect block the comment below
+    // describes, and it would also re-sign our OTA builds with a key the owner's installed app does not
+    // trust (an install-time signature mismatch, not a warning). The fork keeps its own release key.
+    // Release signing. A debug-signed APK trips Play Protect: the debug key ships with every Android
+    // Studio install, and debug builds are `debuggable`. Upstream ships release-signed builds, which is
+    // why theirs installs cleanly.
+    //
+    // The keystore and its passwords live OUTSIDE this (public) repo and are referenced from
+    // local.properties, which is gitignored. Point storeFile at wherever you keep your own key:
+    //   opencfmoto.storeFile=/path/to/your/release.jks
+    //   opencfmoto.storePassword=...   opencfmoto.keyAlias=...   opencfmoto.keyPassword=...
+    // Use forward slashes: in a .properties file a trailing backslash is a line-continuation and
+    // silently swallows the next line.
+    // When those entries are absent (a fresh clone, a contributor, CI) the release build simply stays
+    // unsigned instead of failing — so the project still builds for everyone else.
+    val signingProps = Properties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    val releaseStore = (signingProps.getProperty("opencfmoto.storeFile") ?: "").let { p ->
+        if (p.isBlank()) null else file(p).takeIf { it.exists() }
+    }
+
+    signingConfigs {
+        if (releaseStore != null) {
+            create("release") {
+                storeFile = releaseStore
+                storePassword = signingProps.getProperty("opencfmoto.storePassword")
+                keyAlias = signingProps.getProperty("opencfmoto.keyAlias")
+                keyPassword = signingProps.getProperty("opencfmoto.keyPassword")
             }
         }
     }
@@ -65,6 +113,7 @@ android {
             isMinifyEnabled = slimApk
             isShrinkResources = slimApk
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseStore != null) signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
@@ -75,6 +124,13 @@ android {
     buildFeatures {
         buildConfig = true
         compose = true
+    }
+
+    testOptions {
+        // Let plain-JVM unit tests hold an android.jar type as an inert pass-through (e.g. a Context the
+        // fakes never call methods on) instead of every stub throwing "Stub!". Enables the factory-driver
+        // MECHANISM tests (DefaultBikeConnectionTest re-establish) to reach Connected without Robolectric.
+        unitTests.isReturnDefaultValues = true
     }
 
     // Wireless Android Auto needs the packaged aa_privkey (same as prior releases).
@@ -96,6 +152,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.jmdns)
+    implementation(libs.gson)
     implementation(libs.protobuf.java)
     implementation(libs.conscrypt.android)
     implementation(libs.osmdroid)

@@ -213,6 +213,7 @@ class AaReceiver(
         }
         transport = t
         AaVideoBridge.aaSessionLive = true
+        AaVideoBridge.aaSessionSeen = true
         AaVideoBridge.aaDecoding = false
         steadyVideoFired = false
 

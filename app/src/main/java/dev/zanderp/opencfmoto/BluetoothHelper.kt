@@ -103,6 +103,24 @@ object BluetoothHelper {
             context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
             PackageManager.PERMISSION_GRANTED
 
+    /** Bonded devices the rider can pick as a Connect trigger (MAC + display name). */
+    fun bondedDevices(context: Context): List<Pair<String, String>> {
+        if (!hasConnectPermission(context)) return emptyList()
+        val mgr = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = mgr?.adapter ?: return emptyList()
+        return try {
+            adapter.bondedDevices.orEmpty()
+                .mapNotNull { d ->
+                    val mac = d.address?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val name = d.name?.takeIf { it.isNotBlank() } ?: mac
+                    mac to name
+                }
+                .sortedBy { it.second.lowercase() }
+        } catch (_: SecurityException) {
+            emptyList()
+        }
+    }
+
     /** Open the system Bluetooth settings so the rider can pair/connect the bike. */
     fun openBluetoothSettings(context: Context) {
         val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {

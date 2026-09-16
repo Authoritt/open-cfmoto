@@ -192,6 +192,7 @@ class EasyConnProber(
         //    minutes, and without reuse the rebind fails with EADDRINUSE — so no media servers open,
         //    the bike has nowhere to connect back to, and the dash shows an empty screen (no frames).
         var bindConflict = false
+        var addressGone = false
         for (port in LISTEN_PORTS) {
             try {
                 val ss = ServerSocket()
@@ -201,6 +202,8 @@ class EasyConnProber(
                 spawnAccept(port, ss)
             } catch (e: Exception) {
                 bindConflict = true
+                // EADDRNOTAVAIL is a different animal from EADDRINUSE: the address is GONE, not taken.
+                if (e.message?.contains("EADDRNOTAVAIL", ignoreCase = true) == true) addressGone = true
                 log("bind :$port failed: ${e.message}")
             }
         }
@@ -211,6 +214,30 @@ class EasyConnProber(
         // and the bike connects back to IT, not us). Probing anyway is pointless: no media server means
         // no frames and a blank dash. Fail fast with an actionable message instead of failing silently.
         if (bindConflict) {
+            // …unless they are OURS. Two connects in a row leave the previous prober's servers closing, and
+            // blaming the official app there sends the rider to force-stop something that is not running —
+            // seen on 2026-08-20 18:51:19, all three ports EADDRINUSE 33 s after our own previous attempt.
+            // The address vanished under us — typically our own Wi-Fi Direct group was just removed. Nobody
+            // is holding anything, so telling the rider to wait or to close another app is wrong on both
+            // counts (2026-08-20 20:23: all three ports EADDRNOTAVAIL right after the group came down).
+            if (addressGone) {
+                log(
+                    "!! the address ${myIp.hostAddress} no longer exists — the bike network came down under us. " +
+                        "Nothing is holding the ports; connect again to build a fresh one.",
+                )
+                ConnectionState.set(Phase.ERROR, "la red de la moto se cayó — vuelve a conectar")
+                stop()
+                return
+            }
+            if (BikeLink.prober !== this) {
+                log(
+                    "!! link ports are still held by our OWN previous connect (it is shutting down). " +
+                        "Wait a few seconds and press Connect again — nothing else needs closing.",
+                )
+                ConnectionState.set(Phase.ERROR, "espera unos segundos y vuelve a conectar")
+                stop()
+                return
+            }
             log("!! link ports are held by another app (usually the official CFMoto/EasyConnect app). " +
                 "Close it (force-stop) and reconnect — OpenCfMoto needs ports ${LISTEN_PORTS.toList()}.")
             ConnectionState.set(Phase.ERROR, "close the official CFMoto app, then reconnect")
@@ -219,8 +246,20 @@ class EasyConnProber(
         }
 
         // 2. Discover EasyConn (NSD → :10930 wake → nearby port scan), then MDNS_RESPOND.
-        thread(name = "ec-probe", isDaemon = true) {
-            discoverAndProbe(bikeIp, myIp, network)
+        //
+        // …unless the "bike" resolved to our OWN address. On the phone-hotspot path we are the Wi-Fi
+        // Direct group owner, so the gateway IS us (192.168.49.1) and the dash is a client that dials
+        // INTO the ports opened above. Probing then means probing ourselves: the port scan connects to
+        // our own 10920-10922, our servers accept, and the link announces "bike connected … media
+        // closed" and then "Link dropped — reconnecting" without a single byte from the bike. The
+        // 19-Aug Rieju log shows the whole phantom inside 40 ms at 22:38:18 — noise that burns the
+        // reconnect budget and makes the log claim a connection that never happened.
+        if (bikeIp == myIp) {
+            log("we are the group owner (${myIp.hostAddress}) — the dash dials in to us, so there is nothing to probe; waiting on the listening ports (a scan here would only find ourselves)")
+        } else {
+            thread(name = "ec-probe", isDaemon = true) {
+                discoverAndProbe(bikeIp, myIp, network)
+            }
         }
         startHeartbeatLog()
         stitchExec = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->

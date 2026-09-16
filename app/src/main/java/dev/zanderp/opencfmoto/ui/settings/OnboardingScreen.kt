@@ -118,7 +118,10 @@ fun OnboardingScreen(nav: NavController) {
                 doneLabel = stringResource(R.string.ovk_onboarding_granted),
                 pendingLabel = stringResource(R.string.ovk_onboarding_pending),
                 first = true,
-            ) { permLauncher.launch(SetupHelper.requiredPermissions().toTypedArray()) }
+                // onboardingPermissions, not requiredPermissions: the batch also offers the Android 13+
+                // nearby-devices grant that Wi-Fi Direct needs. The row's "done" tick stays on the required
+                // core, so declining it never traps anyone in the gate (SetupHelper.wifiDirectPermissions).
+            ) { permLauncher.launch(SetupHelper.onboardingPermissions().toTypedArray()) }
 
             StepRow(
                 done = canAutoResume,

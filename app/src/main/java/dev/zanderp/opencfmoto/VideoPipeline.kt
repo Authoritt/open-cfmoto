@@ -127,6 +127,11 @@ class VideoPipeline(
     // freshly-attached bike client receives is a full SPS+PPS+IDR. See onBikeDataStart().
     @Volatile private var awaitKeyframe = false
 
+    // When the dash attached. The dash decoder paints green/garbled until it receives a full keyframe,
+    // so the gap between this and the first keyframe we queue IS the duration of the green the rider
+    // sees. Measured rather than guessed: reported as "the map went green for longer this time".
+    @Volatile private var bikeAttachedAtMs = 0L
+
     /** Latest Annex-B SPS/PPS from the encoder (null until [BUFFER_FLAG_CODEC_CONFIG]). */
     fun codecConfigBytes(): ByteArray? = codecConfig
 
@@ -365,8 +370,24 @@ class VideoPipeline(
             val metrics = context.resources.displayMetrics
             val density = metrics.densityDpi.coerceAtLeast(160)
             // Start the capture buffer at the physical display size; app-capture resize updates it.
-            val initW = metrics.widthPixels.coerceAtLeast(width).let { it - (it % 2) }
-            val initH = metrics.heightPixels.coerceAtLeast(height).let { it - (it % 2) }
+            // If Setup locked landscape/portrait but the phone has not finished rotating, swap so
+            // a portrait buffer is not letterboxed into a wide dash (1080×2436 → 170px strip).
+            var initW = metrics.widthPixels.coerceAtLeast(width).let { it - (it % 2) }
+            var initH = metrics.heightPixels.coerceAtLeast(height).let { it - (it % 2) }
+            val beforeW = initW
+            val beforeH = initH
+            when (VideoPrefs.mirrorShape(context, width, height)) {
+                MirrorShape.LANDSCAPE -> if (initH > initW) {
+                    val t = initW; initW = initH; initH = t
+                }
+                MirrorShape.PORTRAIT -> if (initW > initH) {
+                    val t = initW; initW = initH; initH = t
+                }
+                null -> Unit
+            }
+            if (initW != beforeW || initH != beforeH) {
+                log("[VIDEO] mirror buffer ${beforeW}x$beforeH → ${initW}x$initH (orientation lock)")
+            }
 
             val scaler = AaCompositor(log).also { it.start(initW, initH) }
             mirrorScaler = scaler
@@ -624,7 +645,13 @@ class VideoPipeline(
                         // client never received, so serving it would leave the dash decoder uninitialised
                         // (black). Drop until the next keyframe. (Buffer still released below.)
                     } else {
-                        if (isKey) awaitKeyframe = false
+                        if (isKey) {
+                            if (awaitKeyframe && bikeAttachedAtMs > 0L) {
+                                log("[VIDEO] first keyframe queued ${android.os.SystemClock.elapsedRealtime() - bikeAttachedAtMs}ms after the dash attached — the dash paints green for exactly this long")
+                                bikeAttachedAtMs = 0L
+                            }
+                            awaitKeyframe = false
+                        }
                         val out = if (isKey && codecConfig != null) codecConfig!! + bytes else bytes
                         writeDump(out)
                         // Keep the queue fresh: if full, drop oldest so we never lag far behind. A
@@ -728,6 +755,7 @@ class VideoPipeline(
     fun onBikeDataStart() {
         frameQueue.clear()
         awaitKeyframe = true
+        bikeAttachedAtMs = android.os.SystemClock.elapsedRealtime()
         try {
             codec?.setParameters(android.os.Bundle().apply {
                 putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)

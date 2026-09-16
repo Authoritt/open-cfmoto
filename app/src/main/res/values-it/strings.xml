@@ -526,9 +526,9 @@
     <string name="main_phone_hotspot_no_iface">Hotspot del telefono non trovato — attiva l\'hotspot Android con SSID/password del cruscotto, poi Connetti di nuovo</string>
     <string name="main_phone_hotspot_no_peer">Hotspot attivo ma cruscotto non trovato — tieni aperta la schermata di abbinamento e riprova</string>
     <string name="main_phone_hotspot_dialog_title">Configurazione hotspot telefono</string>
-    <string name="main_phone_hotspot_dialog_message">Questa moto si collega all\'hotspot del telefono (Android non può creare quell\'hotspot per te).\n\n1. Digita SSID e password mostrati sul cruscotto (solo promemoria).\n2. Apri le impostazioni hotspot e imposta quei valori esatti.\n3. Tieni aperta la schermata di abbinamento — aspettiamo ~45s la moto.</string>
-    <string name="main_phone_hotspot_ssid_hint">SSID hotspot cruscotto</string>
-    <string name="main_phone_hotspot_pwd_hint">Password hotspot cruscotto</string>
+    <string name="main_phone_hotspot_dialog_message">Il cruscotto si collega all\'hotspot del telefono. Android non permette a un\'app di attivarlo al posto tuo, quindi sono due passaggi.</string>
+    <string name="main_phone_hotspot_ssid_hint">Nome della rete sul cruscotto</string>
+    <string name="main_phone_hotspot_pwd_hint">Password sul cruscotto</string>
     <string name="main_phone_hotspot_open_settings">Apri impostazioni hotspot</string>
     <string name="main_phone_hotspot_ready">Hotspot attivo — cerca</string>
     <string name="main_phone_hotspot_settings_failed">Impossibile aprire le impostazioni hotspot — aprirle manualmente</string>

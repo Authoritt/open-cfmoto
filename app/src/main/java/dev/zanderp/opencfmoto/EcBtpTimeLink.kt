@@ -144,13 +144,7 @@ internal class EcBtpTimeLink(
                 log("[EC-BTP] answered clock (${reply.size}B, result=$written)")
             }
         }
-        val opened = runCatching {
-            device.connectGatt(appContext, false, callback, BluetoothDevice.TRANSPORT_LE)
-        }.getOrNull()
-        if (opened == null) {
-            log("[EC-BTP] could not open $label")
-            return
-        }
+        val opened = openGattTransport(device, callback, label) ?: return
         synchronized(lock) {
             if (closed.get()) {
                 runCatching { opened.disconnect() }
@@ -159,6 +153,24 @@ internal class EcBtpTimeLink(
                 connections += opened
             }
         }
+    }
+
+    /** LE first (dash clock), then AUTO — some Zontes names never reach HCI on LE-only. */
+    private fun openGattTransport(
+        device: BluetoothDevice,
+        callback: BluetoothGattCallback,
+        label: String,
+    ): BluetoothGatt? {
+        val le = runCatching {
+            device.connectGatt(appContext, false, callback, BluetoothDevice.TRANSPORT_LE)
+        }.getOrNull()
+        if (le != null) return le
+        log("[EC-BTP] LE open missed $label — retry AUTO")
+        val auto = runCatching {
+            device.connectGatt(appContext, false, callback, BluetoothDevice.TRANSPORT_AUTO)
+        }.getOrNull()
+        if (auto == null) log("[EC-BTP] could not open $label")
+        return auto
     }
 
     private fun dataCharacteristicOf(service: BluetoothGattService): BluetoothGattCharacteristic? =

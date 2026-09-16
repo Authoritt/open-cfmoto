@@ -26,6 +26,15 @@ internal object EcBtpProtocol {
     const val CMD_QUERY_TIME: Byte = 0x55
     const val QUERY_TIME_LAYOUT = "dd.MM.yyyy HH:mm:ss:zzz"
 
+    // AP-info / Wi-Fi credential handshake (phone hosts a hotspot, dash joins it over BLE).
+    // Untyped (Int, not Byte) — EcBtpApInfo builds its frame with raw int arithmetic/xor, unlike
+    // the Byte-typed clock commands above which flow through [build]'s `command: Byte` parameter.
+    const val CMD_EC_BTP_CLIENT_INFO = 0x30
+    const val CMD_REQUEST_BUILD_NET = 0x50
+    const val CMD_NOTIFY_BUILD_NET_FINISH = 0x51
+    const val CMD_NOTIFY_AP_INFO = 0x52
+    const val CMD_NOTIFY_CAR_NET_INFO = 0x53
+
     private const val FRAME_OVERHEAD = 5
     private const val LENGTH_OVERHEAD = 4
     private const val MAX_STRING_PAYLOAD = 120

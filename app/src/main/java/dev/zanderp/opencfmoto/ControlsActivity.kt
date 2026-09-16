@@ -121,23 +121,18 @@ class ControlsActivity : AppCompatActivity() {
             findViewById<View>(R.id.tv_touch_hint).visibility = View.VISIBLE
         }
 
-        // Handlebar-button mode toggle (live-applied if the bridge is running).
+        // The ONE handlebar switch, same setting the Compose screen writes: ON = the bars control the
+        // phone's audio, OFF (default) = they drive the dash. The second toggle that used to sit below is
+        // gone: two switches for one decision is how the rider's choice ended up meaning nothing.
         val sw = findViewById<MaterialSwitch>(R.id.switch_control_aa)
-        sw.isChecked = ButtonMode.isControlAa(this)
-        sw.setOnCheckedChangeListener { _, checked ->
-            ButtonMode.set(this, checked)
-            MediaButtonBridge.instance?.setCaptureActive(checked)
-            LogBus.log("→ handlebar buttons ${if (checked) "control Android Auto" else "control media"}")
-            if (checked) ensureMicPermission()
+        sw.setText(R.string.ovk_handlebar_audio)
+        sw.isChecked = HandlebarAudioMode.isAudio(this)
+        sw.setOnCheckedChangeListener { _, audio ->
+            HandlebarAudioMode.setAudio(this, audio)
+            MediaButtonBridge.instance?.setCaptureActive(!audio)
+            if (!audio) ensureMicPermission()
         }
-
-        // ▲/▼ = navigate the AA menu (default) vs. plain volume. Live-applied via the pref setter.
-        val swVol = findViewById<MaterialSwitch>(R.id.switch_handlebar_volume_nav)
-        swVol.isChecked = HandlebarVolumeMode.isNavigate(this)
-        swVol.setOnCheckedChangeListener { _, checked ->
-            HandlebarVolumeMode.set(this, checked)
-            LogBus.log("→ handlebar ▲/▼ ${if (checked) "navigate the AA menu" else "control volume"}")
-        }
+        findViewById<MaterialSwitch>(R.id.switch_handlebar_volume_nav).visibility = View.GONE
 
         findViewById<MaterialButton>(R.id.btn_customize).setOnClickListener {
             startActivity(Intent(this, ButtonMappingActivity::class.java))

@@ -42,10 +42,17 @@ object SettingsBackup {
         val s = JSONObject()
         s.put("videoQuality", VideoPrefs.get(context).name)
         s.put("screenFit", VideoPrefs.fit(context).name)
+        s.put("mirrorOrientation", VideoPrefs.mirrorOrientation(context).name)
         s.put("powerMode", VideoPrefs.power(context).name)
         s.put("resolutionMode", VideoPrefs.resolution(context).name)
+        s.put("aaDpiOverride", VideoPrefs.dpiOverride(context) ?: 0)
+        s.put("remotePad", RemotePad.enabled(context))
         s.put("profileOverride", ProfilePrefs.get(context).id)
         s.put("controlAa", ButtonMode.isControlAa(context))
+        // `controlAa` IS the handlebar switch now (inverted: true = drives the dash), so one key carries
+        // it. It matters that it is here at all: when the fork took its own applicationId (4e5fa19)
+        // Android saw a NEW app with an empty data dir and every per-bike belief reset, and a rider had no
+        // way to carry their choice over. A setting someone chose should outlive an install.
         s.put("forceNonTouch", AppSettings.forceNonTouch(context))
         s.put("forceTouch", AppSettings.forceTouch(context))
         s.put("wifiTransport", AppSettings.transport(context).id)
@@ -120,16 +127,25 @@ object SettingsBackup {
         s.optString("screenFit").takeIf { it.isNotBlank() }?.let {
             runCatching { VideoPrefs.setFit(context, ScreenFit.valueOf(it)) }
         }
+        s.optString("mirrorOrientation").takeIf { it.isNotBlank() }?.let {
+            runCatching { VideoPrefs.setMirrorOrientation(context, MirrorOrientation.valueOf(it)) }
+        }
         s.optString("powerMode").takeIf { it.isNotBlank() }?.let {
             runCatching { VideoPrefs.setPower(context, PowerMode.valueOf(it)) }
         }
         s.optString("resolutionMode").takeIf { it.isNotBlank() }?.let {
             runCatching { VideoPrefs.setResolution(context, ResolutionMode.valueOf(it)) }
         }
+        if (s.has("aaDpiOverride")) {
+            val dpi = s.optInt("aaDpiOverride", 0)
+            VideoPrefs.setDpiOverride(context, dpi.takeIf { it > 0 })
+        }
+        if (s.has("remotePad")) RemotePad.setEnabled(context, s.optBoolean("remotePad"))
         if (s.has("profileOverride")) {
             ProfilePrefs.set(context, ProfileOverride.byId(s.optString("profileOverride")))
         }
         if (s.has("controlAa")) ButtonMode.set(context, s.optBoolean("controlAa"))
+
         if (s.has("forceNonTouch")) AppSettings.setForceNonTouch(context, s.optBoolean("forceNonTouch"))
         if (s.has("forceTouch")) AppSettings.setForceTouch(context, s.optBoolean("forceTouch"))
         if (s.has("wifiTransport")) {

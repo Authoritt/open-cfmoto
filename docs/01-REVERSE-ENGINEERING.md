@@ -177,9 +177,10 @@ Media handling: `EasyConnProber.mediaLoop` / `handleMediaReq` / `sendFrameRaw`.
 
 ## 6. BLE wake-up (NOT needed for projection — documented for completeness)
 
-The bike also has a BLE service used by the official app for vehicle control (lock/telemetry). It is
+The bike also advertises a BLE service the official app uses (wake-up / audio path). It is
 **not required for MotoPlay projection** (verified: full projection works with BLE untouched). Kept in
-`BleWakeUp.kt` / `BleProtocol.kt` / `BleSecrets.kt` but dormant.
+`BleWakeUp.kt` / `BleProtocol.kt` / `BleSecrets.kt` but dormant. On a T-Box-less 450NK the advertised
+GATT is a Feasycom audio module, not live fuel/RPM telemetry — see [`RE-VEHICLE-TELEMETRY.md`](RE-VEHICLE-TELEMETRY.md).
 
 - GATT: service `0000B354-D6D8-C7EC-BDF0-EAB1BFC6BCBC`, write char `0000B356-…`, notify `0000B357-…`.
 - Frame: `AB CD | cmd(1) | len(2,LE) | protobuf | sum8 | CF`; `sum8 = (cmd + len_lo + len_hi + Σpayload) & 0xFF`.

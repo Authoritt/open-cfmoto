@@ -37,6 +37,7 @@ object BikeLink {
     /** Wi‑Fi Direct path: no [Network], so the prober binds/probes with these overrides. */
     @Volatile private var p2pBindIp: Inet4Address? = null
     @Volatile private var p2pGatewayIp: Inet4Address? = null
+    @Volatile private var aaDropRetried = false
 
     /** Reset the gate at the start of a fresh Android Auto connection attempt. */
     @Synchronized
@@ -48,6 +49,34 @@ object BikeLink {
         proberStarted = false
         p2pBindIp = null
         p2pGatewayIp = null
+        aaDropRetried = false
+        AaVideoBridge.aaSessionSeen = false
+        // Leave the bike Network held, but unpin the process so AA can use 127.0.0.1.
+        appContext?.let { BikeWifi.unbindProcess(context = it) }
+    }
+
+    /**
+     * True while this hand-off runs on a transport the PHONE hosts and that Wi-Fi Direct does not drive:
+     * the classic phone-hotspot route (`CfmotoConnect.joinPhoneHotspot` → [markP2pReady] with the tether
+     * interface's bind IP). It is the one AA-reachable transport whose liveness NOTHING in the Wi-Fi layer
+     * can report — there is no bike `Network` ([BikeWifi.currentNetwork] stays null for the whole ride)
+     * and no Wi-Fi Direct group ([BikeWifiP2p.isSessionActive] is false because that helper is never used
+     * on this route). Read by [AndroidAutoService.bikeTransportConnected] so the reconnect supervisor does
+     * not read "unreportable" as "down" and park a live dash. Cleared by [beginHandoff] with the rest of
+     * the gate (`p2pBindIp = null`).
+     *
+     * Deliberately NOT true for Wi-Fi Direct, which also lands in [markP2pReady]: there [BikeWifiP2p]
+     * reports the group, and upstream's 7e198ae fix depends on a lost group still being observable.
+     */
+    val onPhoneHostedTransport: Boolean
+        get() = p2pBindIp != null && !BikeWifiP2p.isSessionActive
+
+    /** One extra self-mode trigger after AA attaches then dies before video is steady. */
+    @Synchronized
+    fun takeAaDropRetry(): Boolean {
+        if (aaDropRetried || aaVideoSteady) return false
+        aaDropRetried = true
+        return true
     }
 
     @Synchronized
@@ -78,6 +107,11 @@ object BikeLink {
         if (proberStarted || !aaVideoSteady || !networkReady) return
         val p = prober ?: return
         proberStarted = true
+        appContext?.let { ctx ->
+            if (BikeWifi.rebindProcessToBike(ctx)) {
+                LogBus.log("→ process bound to bike Wi-Fi (AA video is live)")
+            }
+        }
         LogBus.log("→ AA video + bike Wi-Fi both ready — starting EasyConn PXC flow …")
         ConnectionState.set(Phase.PXC_CONNECTING)
         appContext?.let { DashClockBle.start(it) }
@@ -98,6 +132,18 @@ object BikeLink {
      */
     @Synchronized
     fun onWifiReacquired(network: Network?) {
+        // A factory connection owns its own reconnect. Drive it via the holder (single path, review M4) and DO
+        // NOT touch the classic prober below (prevents the double-prober race). This runs on BikeWifi's
+        // ConnectivityThread (NOT the main looper). Inert when no factory connection is live → the classic path
+        // runs byte-for-byte. Single convergence point for ALL classic re-establish (real re-acquire + socket
+        // recovery), so forking here covers both (flip-work-design.md §2).
+        // The holder itself decides whether it can take it: a driver that already ended in a terminal Error
+        // has no receiver for the event, so it hands the re-acquire BACK to the classic prober below instead
+        // of swallowing it (that driver is dead — an initial-connect failure ends it on the first attempt).
+        if (dev.zanderp.opencfmoto.connection.BikeConnectionHolder.onWifiReacquired(network)) {
+            LogBus.log("→ Wi-Fi re-acquired → factory connection re-establish (classic prober untouched)")
+            return
+        }
         // If the service parked Android Auto (long outage → torn down to save battery), it must rebuild
         // AA before the bike link is useful — hand off to the service instead of restarting the prober
         // against a dead (stopped) pipeline.

@@ -7,7 +7,6 @@
 // powers: an in-cockpit search and a locate-me/follow button. Our own Android-Auto — phone free.
 package dev.zanderp.opencfmoto.ui.cockpit
 
-import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,12 +51,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
-import dev.zanderp.opencfmoto.GpxActivity
+import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.DashRemote
 import dev.zanderp.opencfmoto.GpxNav
 import dev.overtake.maps.RendererKind
 import dev.overtake.maps.contract.MapRenderer
 import dev.zanderp.opencfmoto.GpxSession
+import dev.zanderp.opencfmoto.connection.CfmotoConnect
 import dev.zanderp.opencfmoto.cockpit.CallState
 import dev.zanderp.opencfmoto.cockpit.NavGuidance
 import dev.zanderp.opencfmoto.overtakeOffline
@@ -66,13 +67,12 @@ import dev.zanderp.opencfmoto.ui.components.MapThemeToggle
 import dev.zanderp.opencfmoto.settings.DashRenderer
 import dev.zanderp.opencfmoto.ui.Routes
 import dev.zanderp.opencfmoto.ui.theme.LocalCockpitColors
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.NavLauncher
-import dev.zanderp.opencfmoto.HudViewActivity
 import dev.zanderp.opencfmoto.settings.MapProvider
 import dev.zanderp.opencfmoto.settings.SettingsStore
 import kotlinx.coroutines.launch
@@ -103,6 +103,7 @@ import dev.zanderp.opencfmoto.MapPlaces
 import dev.zanderp.opencfmoto.MapPrefs
 import dev.overtake.maps.OvertakeMaps
 import dev.overtake.maps.OvertakeMapsConfig
+import dev.overtake.maps.contract.SearchIntent
 import dev.overtake.maps.search.NominatimSearch
 import dev.overtake.maps.model.Route
 import dev.zanderp.opencfmoto.overtakeRouter
@@ -127,8 +128,11 @@ fun CockpitScreen(nav: NavController) {
     val store = remember { SettingsStore(ctx.applicationContext) }
     val provider by store.mapProvider.collectAsStateWithLifecycle(initialValue = MapProvider.BUILTIN)
     val scope = rememberCoroutineScope()
-    var showDest by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
+    // Google Maps / Waze are separate apps: they take the destination through a deep link and do the
+    // navigating. Everything else (Propio, and Espejo — which mirrors this phone) is navigated by the
+    // cockpit itself on its own map. ONE destination box either way; only the submit differs.
+    val handsToNavApp = provider == MapProvider.GOOGLE || provider == MapProvider.WAZE
 
     fun route(dest: String) {
         val d = dest.trim()
@@ -137,12 +141,31 @@ fun CockpitScreen(nav: NavController) {
             MapProvider.WAZE ->
                 if (d.isEmpty()) NavLauncher.openWaze(ctx, LogBus::log)
                 else NavLauncher.navigateWaze(ctx, d, LogBus::log)
-            else -> ctx.startActivity(Intent(ctx, GpxActivity::class.java)) // Propio / Espejo → own map hub
+            else -> {
+                // Propio (built-in map): CONNECT + project our own map to the dash IN-PLACE via the connection
+                // factory — no GpxActivity/MainActivity bridge (which would flash the classic UI). Same direct
+                // path as the Dashboard's Conectar. Defensive only: route() is reached from the destination
+                // box exclusively for Google/Waze — Propio destinations go to selectBuiltinDestination.
+                val activity = ctx.findActivity()
+                when {
+                    activity == null -> LogBus.log("[cockpit] Conectar: sin Activity host — no se puede conectar")
+                    BikeMemory.lastQr(ctx) == null -> nav.navigate(Routes.SCAN)
+                    else -> {
+                        GpxSession.prepareFreeRide()
+                        CfmotoConnect.startCfmotoMap(activity, preferFactory = true)
+                    }
+                }
+            }
         }
     }
 
     // cockpitMode = show the widget dash (music strip); false = just the map, full-bleed.
     var cockpitMode by rememberSaveable { mutableStateOf(true) }
+
+    // Mirror the Mapa|Panel choice to the projected bike dash so Panel shows the now-playing strip
+    // there too (not just on the phone). DashRemote remembers it for a dash that binds later; when a
+    // dash is already projecting it flips live with no PXC reconnect.
+    LaunchedEffect(cockpitMode) { DashRemote.applyPanelMode(cockpitMode) }
 
     // The full-bleed map now renders the SELECTED engine (SettingsStore.dashRenderer) through the
     // Overtake library's MapRenderer — the SAME renderer the dash uses, so the cockpit matches the dash
@@ -192,6 +215,11 @@ fun CockpitScreen(nav: NavController) {
     var navigating by remember { mutableStateOf(false) }
     var navProgress by remember { mutableStateOf<GpxNav.Progress?>(null) }
 
+    // Heading-up vs north-up for the chase camera. The dash map has had this (and a route overview)
+    // since day one; the phone map only ever had "centre on me", which is why the owner kept reporting
+    // that the driving view he sees in Google Maps was missing here. Same three controls, both screens.
+    var headingUpMode by remember { mutableStateOf(true) }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(kind, needsMapsforgeMap) {
         // Host the SELECTED renderer (skip when the Mapsforge gate shows the download card instead).
@@ -218,7 +246,7 @@ fun CockpitScreen(nav: NavController) {
                 // Continuous chase ONLY while navigating (heading-up nav camera). In free ride the rider
                 // keeps full control of pan/zoom; "locate me" does a one-shot recenter instead of leashing.
                 if (navigating && following) {
-                    renderer.follow(loc.latitude, loc.longitude, brng, 17.5, headingUp = true, moving = moving)
+                    renderer.follow(loc.latitude, loc.longitude, brng, 17.5, headingUp = headingUpMode, moving = moving)
                 }
             }
             @Deprecated("Deprecated in Java")
@@ -355,6 +383,9 @@ fun CockpitScreen(nav: NavController) {
         // GpxSession / the follow camera don't keep pointing at the old destination.
         if (navigating) {
             runCatching { GpxSession.finishToFreeRide() }
+            // Clear the old route on the live dash before the new pick re-targets it (startNavigation
+            // sends the fresh DashRemote.navigateTo); otherwise the stale route lingers in between.
+            if (DashRemote.isAvailable) runCatching { DashRemote.endNavigation() }
             following = false
             navigating = false
             navProgress = null
@@ -398,7 +429,7 @@ fun CockpitScreen(nav: NavController) {
             val moving = loc != null && loc.hasSpeed() && loc.speed > 1.2f
             val brng = if (loc != null && loc.hasBearing() && moving) loc.bearing else 0f
             renderer.setMe(ll.first, ll.second, brng)
-            renderer.follow(ll.first, ll.second, brng, 17.5, headingUp = true, moving = moving)
+            renderer.follow(ll.first, ll.second, brng, 17.5, headingUp = headingUpMode, moving = moving)
         } else {
             LogBus.log("[cockpit-nav] iniciar sin fix aún — el mapa seguirá al primer GPS")
         }
@@ -409,6 +440,9 @@ fun CockpitScreen(nav: NavController) {
     // follow camera and all nav state; GpxSession returns to FREE_RIDE (the dash projection follows).
     fun stopNavigation() {
         runCatching { GpxSession.finishToFreeRide() }
+        // Tell the LIVE bike dash the trip ended too, so it clears the route and stops turn-by-turn
+        // voice instead of showing a stale, still-talking navigation (no PXC reconnect).
+        if (DashRemote.isAvailable) runCatching { DashRemote.endNavigation() }
         clearSearchOverlays()
         following = false // stops the chase in the location listener
         navigating = false
@@ -444,7 +478,7 @@ fun CockpitScreen(nav: NavController) {
             val brng = if (loc != null && loc.hasBearing() && moving) loc.bearing else 0f
             renderer.setMe(ll.first, ll.second, brng)
             // Recenter now: heading-up while navigating (the running nav camera), north-up otherwise.
-            renderer.follow(ll.first, ll.second, brng, if (navigating) 17.5 else 17.0, headingUp = navigating, moving = moving)
+            renderer.follow(ll.first, ll.second, brng, if (navigating) 17.5 else 17.0, headingUp = headingUpMode && navigating, moving = moving)
         } else {
             LogBus.log("[cockpit-locate] sin fix aún — el mapa seguirá al primer GPS")
             runCatching { Toast.makeText(ctx, ctx.getString(R.string.ovk_finding_location), Toast.LENGTH_SHORT).show() }
@@ -476,7 +510,10 @@ fun CockpitScreen(nav: NavController) {
                 DestinationBar(
                     providerLabel = providerLabel(ctx, provider),
                     modifier = Modifier.weight(1f),
-                    onSearch = { if (provider == MapProvider.BUILTIN) showSearch = true else showDest = true },
+                    // ONE destination box for every provider (it used to pop a separate dialog for
+                    // Google/Waze, which the rider read as "a second popup instead of the box I was
+                    // already using"). What changes with the provider is only what submit does.
+                    onSearch = { showSearch = true },
                     onCycleProvider = { scope.launch { store.setMapProvider(nextProvider(provider)) } },
                 )
                 // Persistent day/night/auto toggle (compact) — flip the map look without leaving the map.
@@ -485,11 +522,19 @@ fun CockpitScreen(nav: NavController) {
                 }
             }
             ModeToggle(cockpitMode) { cockpitMode = it }
-            // AA mode only: a "Dash view" button opens the live Android Auto HUD (Google Maps / Waze as
-            // projected to the dash) mirrored on the phone. Overtake draws its own map and never uses AA,
-            // so this is hidden for the built-in provider and never competes with the Overtake pipeline.
-            if (provider == MapProvider.GOOGLE || provider == MapProvider.WAZE) {
-                DashViewButton { runCatching { HudViewActivity.start(ctx) } }
+            // AA mode only: "Dash view" opens the LIVE Android Auto video (Google Maps / Waze exactly as
+            // Android Auto is painting them on the bike dash) — the cockpit's own Compose screen, which
+            // shows that video or nothing at all. It used to open the classic HudViewActivity, whose
+            // no-video fallback paints OUR map instead: with Google/Waze that map is not a preview of the
+            // dash, it is a different map, and the rider read it as the dash. Overtake draws its own map
+            // and never uses AA, so this is hidden for the built-in provider (there, the cockpit map IS
+            // what we project — WYSIWYG) and never competes with the Overtake pipeline.
+            if (handsToNavApp) {
+                // The provider is chosen right here (the chip on the destination bar), so this is where
+                // the rider learns what choosing Google/Waze actually means: the dash is not ours to
+                // paint in that mode, and the order matters — bike first, destination after.
+                ProviderNote(stringResource(R.string.ovk_provider_aa_hint))
+                DashViewButton { nav.navigate(Routes.DASH_VIEW) }
             }
             if (navState.active) NavCard(navState, Modifier.fillMaxWidth())
         }
@@ -526,8 +571,7 @@ fun CockpitScreen(nav: NavController) {
         // music panel, the ~190dp call card, or the shorter nav progress card) so it's never buried; in
         // clean Mapa mode it drops to the corner. While navigating it doubles as the re-center control
         // (osmdroid drops follow on a manual pan). Drawn before the search overlay so search covers it.
-        LocateButton(
-            following = following,
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(
@@ -539,25 +583,63 @@ fun CockpitScreen(nav: NavController) {
                         else -> 20.dp
                     },
                 ),
-            onClick = { locateMe() },
-        )
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Whole-route overview, only when there is a route to show. Always north-up, like the dash:
+            // an overview that rotates with the rider is unreadable.
+            navRoute?.let { r ->
+                MapControlButton(glyph = "⤢", active = false) {
+                    following = false
+                    headingUpMode = false
+                    renderer.resetNorth()
+                    renderer.zoomToRoute(r.points.map { it.lat to it.lon })
+                }
+            }
+            // Driving view vs north-up. Lit while the map turns with the rider, which IS the "focus on
+            // driving" the owner was missing: the route ahead stays pointing up the screen.
+            MapControlButton(glyph = if (headingUpMode) "➤" else "N", active = headingUpMode) {
+                headingUpMode = !headingUpMode
+                if (!headingUpMode) renderer.resetNorth()
+                lastFix?.let { loc ->
+                    val moving = loc.hasSpeed() && loc.speed > 1.2f
+                    renderer.follow(
+                        loc.latitude, loc.longitude,
+                        if (loc.hasBearing() && moving) loc.bearing else 0f,
+                        if (navigating) 17.5 else 17.0,
+                        headingUp = headingUpMode,
+                        moving = moving,
+                    )
+                }
+            }
+            LocateButton(following = following, modifier = Modifier, onClick = { locateMe() })
+        }
 
-        // In-cockpit autocomplete search for the built-in Overtake map — native, drawn over the map,
-        // no GpxActivity handoff.
+        // The ONE destination box, for every provider — native autocomplete drawn over the map, no
+        // GpxActivity handoff and no second dialog. A pick on Propio/Espejo becomes a destination on
+        // our own map; on Google/Waze it is handed to that app, which is the only one that can put it
+        // on the dash (through Android Auto). Free text still works there too: the keyboard's "Ir"
+        // sends exactly what was typed — what the old dialog did, and the only way to reach a place
+        // the autocomplete can't find.
         if (showSearch) {
             CockpitSearchOverlay(
+                providerLabel = providerLabel(ctx, provider),
+                handsToNavApp = handsToNavApp,
                 onDismiss = { showSearch = false },
-                onPick = { place -> selectBuiltinDestination(place) },
+                onPick = { place ->
+                    if (handsToNavApp) {
+                        showSearch = false
+                        // The place NAME, not its lat/lon: the classic AA hand-off learned that a bare
+                        // "lat,lon (label)" opens Maps on an empty search, so it navigates by resolved
+                        // name too (MainActivity.sendDestinationToAndroidAuto).
+                        route(place.name)
+                    } else {
+                        selectBuiltinDestination(place)
+                    }
+                },
+                onSubmitText = { typed -> showSearch = false; route(typed) },
             )
         }
-    }
-
-    if (showDest) {
-        DestinationDialog(
-            provider = provider,
-            onDismiss = { showDest = false },
-            onGo = { dest -> showDest = false; route(dest) },
-        )
     }
 }
 
@@ -609,6 +691,24 @@ private fun ModeToggle(cockpit: Boolean, onChange: (Boolean) -> Unit) {
     }
 }
 
+/** One quiet line over the map — same floating-chrome frame as the controls around it, so it reads. */
+@Composable
+private fun ProviderNote(text: String) {
+    val c = LocalCockpitColors.current
+    Text(
+        text,
+        color = c.inkDim,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(c.ground.copy(alpha = 0.92f))
+            .border(1.dp, c.line, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+    )
+}
+
 @Composable
 private fun DashViewButton(onClick: () -> Unit) {
     val c = LocalCockpitColors.current
@@ -647,6 +747,24 @@ private fun GlyphBox(glyph: String, onClick: () -> Unit) {
         Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(c.ground.copy(alpha = 0.92f)).border(1.dp, c.line, RoundedCornerShape(10.dp)).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(glyph, color = c.ink, fontSize = 20.sp) }
+}
+
+/**
+ * Round map control that sits above the locate FAB — same frame, lit with the ignition accent while its
+ * mode is on, so "the map is turning with me" is visible at a glance instead of guessed.
+ */
+@Composable
+private fun MapControlButton(glyph: String, active: Boolean, onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(if (active) c.ignition else c.ground.copy(alpha = 0.92f))
+            .border(1.dp, c.line, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Text(glyph, color = if (active) c.onIgnition else c.ink, fontSize = 19.sp) }
 }
 
 /**
@@ -825,49 +943,26 @@ private fun nextProvider(p: MapProvider): MapProvider = when (p) {
     else -> MapProvider.BUILTIN
 }
 
-/** Type a destination; "Ir" hands it to the active provider (Google Maps / Waze navigate; Propio hub). */
-@Composable
-private fun DestinationDialog(provider: MapProvider, onDismiss: () -> Unit, onGo: (String) -> Unit) {
-    val c = LocalCockpitColors.current
-    val ctx = LocalContext.current
-    var text by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        titleContentColor = c.ink,
-        textContentColor = c.ink,
-        title = { Text(stringResource(R.string.ovk_where_to), fontWeight = FontWeight.Bold) },
-        text = {
-            Column {
-                Text(stringResource(R.string.ovk_route_with, providerLabel(ctx, provider)), color = c.inkDim, fontSize = 12.sp)
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    singleLine = true,
-                    placeholder = { Text(stringResource(R.string.ovk_address_or_place)) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onGo(text) }, enabled = text.isNotBlank()) {
-                Text(stringResource(R.string.ovk_go), color = if (text.isNotBlank()) c.ignition else c.inkFaint, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ovk_cancel), color = c.inkDim) } },
-    )
-}
-
 /**
- * Native in-cockpit search for the built-in ("Overtake") map: a focused field + a live results list,
- * tuned toward Google-Maps quality on the free stack (no paid Places API).
+ * The cockpit's ONE destination box, for every provider: a focused field + a live results list, tuned
+ * toward Google-Maps quality on the free stack (no paid Places API). Google/Waze used to get a separate
+ * little dialog instead — same job, second popup — so this now serves them too ([handsToNavApp]): the
+ * rider is told where the destination is going ("Ruta con Google Maps"), a pick is handed to that app,
+ * and the keyboard's "Ir" sends the typed text as-is, which is all the old dialog could do.
+ *
+ * TWO TIERS, because one of the providers may not be used for autocomplete (see `SearchIntent` and
+ * https://operations.osmfoundation.org/policies/nominatim/):
+ *  - WHILE TYPING (debounced): the platform Geocoder + Photon. Fast, built for autocomplete.
+ *  - ON AN EXPLICIT ASK (the keyboard's search key or the ⌕ button): the same plus Nominatim, the
+ *    precise provider — one deliberate action, one request. This is the tier that finds an exact
+ *    barrio / street number the typeahead couldn't.
  *
  * Sources, biased to the rider's own fix (fallback: map center):
  *  - the extracted `PlaceSearch` (Overtake library) — its `query()` fans out to the platform Geocoder
  *    (Google-backed on a Play-Services device, for specific local street / neighbourhood addresses
- *    Photon/Nominatim miss) AND to Photon + Nominatim worldwide autocomplete, then cross-source merges,
- *    ranks and dedupes them by the [NominatimSearch.relevance] / [NominatimSearch.dedupeKey] blend;
+ *    Photon/Nominatim miss) AND to the worldwide geocoders its `SearchIntent` allows, then
+ *    cross-source merges, ranks and dedupes them by the [NominatimSearch.relevance] /
+ *    [NominatimSearch.dedupeKey] blend;
  *  - [MapPlaces] — the rider's own recents / favourites / home, matched LOCALLY (no network).
  *
  * Feel: with an empty/short query the dropdown instantly lists saved + recent places; while typing it
@@ -880,14 +975,30 @@ private fun DestinationDialog(provider: MapProvider, onDismiss: () -> Unit, onGo
  */
 @Composable
 private fun CockpitSearchOverlay(
+    providerLabel: String,
+    handsToNavApp: Boolean,
     onDismiss: () -> Unit,
     onPick: (MapPlace) -> Unit,
+    onSubmitText: (String) -> Unit,
 ) {
     val c = LocalCockpitColors.current
     val ctx = LocalContext.current
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<SearchPick>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
+    // The explicit search: a counter, not a boolean, because pressing search TWICE on the same text
+    // must run it twice (the rider is retrying) and a LaunchedEffect only restarts when its key
+    // changes. The text is captured ALONGSIDE the tick so the effect can never be re-triggered by a
+    // keystroke — that would be exactly the autocomplete-against-Nominatim this design forbids.
+    var deepSearchTick by remember { mutableStateOf(0) }
+    var deepSearchQuery by remember { mutableStateOf("") }
+    val runDeepSearch = {
+        val q = query.trim()
+        if (q.length >= 2) {
+            deepSearchQuery = q
+            deepSearchTick++
+        }
+    }
     val focus = remember { FocusRequester() }
     // The extracted place-search (Stage 1 of the map-library extraction): a native MapProvider built
     // from the fork's config. We consume only its PlaceSearch here — the renderer/router are pending
@@ -936,23 +1047,29 @@ private fun CockpitSearchOverlay(
         // Instant paint: the rider's own matching places + any previously-cached network answer, so the
         // list is populated the moment the user types, before the debounce/network even starts.
         val cached = if (bLat != null && bLon != null) {
-            NominatimSearch.cachedBiased(q, bLat, bLon) ?: emptyList()
+            NominatimSearch.cachedBiased(q, bLat, bLon, SearchIntent.TYPEAHEAD) ?: emptyList()
         } else {
             emptyList()
         }
         results = rankPicks(q, bLat, bLon, cached, recents, favorites, homePlace)
         searching = true
-        delay(250) // debounce — cancelled if the query changes before it elapses
+        // THE debounce for place search — the only one on this path, deliberately. Nothing leaves
+        // the device until the rider pauses: LaunchedEffect(query) cancels this coroutine on the next
+        // keystroke, so the delay simply never elapses and no request is built. Do NOT add a second
+        // one inside the library (it paces the PRECISE provider on top of this, which is a different
+        // job); two debounces would just add latency nobody can account for.
+        delay(SEARCH_DEBOUNCE_MS)
 
-        // ONE suspend call runs BOTH network sources off the main thread (platform Geocoder + Photon/
-        // Nominatim) and returns them cross-source merged, ranked and deduped by the SAME blend the rows
-        // are scored with (that merge moved into the Overtake library). LaunchedEffect(query) cancels
-        // this coroutine when the query changes, so a superseded answer never paints — replacing the old
-        // seq/Handler marshalling. A failure degrades to no network results; the rider's own local
-        // places still show.
+        // ONE suspend call runs the typeahead sources off the main thread (platform Geocoder +
+        // Photon) and returns them cross-source merged, ranked and deduped by the SAME blend the rows
+        // are scored with (that merge moved into the Overtake library). TYPEAHEAD is what keeps
+        // Nominatim off the typing path — see SearchIntent for the policy. LaunchedEffect(query)
+        // cancels this coroutine when the query changes, so a superseded answer never paints —
+        // replacing the old seq/Handler marshalling. A failure degrades to no network results; the
+        // rider's own local places still show.
         val near = if (bLat != null && bLon != null) dev.overtake.maps.model.GeoPoint(bLat, bLon) else null
         val net = try {
-            search.query(q, near)
+            search.query(q, near, SearchIntent.TYPEAHEAD)
         } catch (ce: kotlinx.coroutines.CancellationException) {
             throw ce
         } catch (e: Exception) {
@@ -960,6 +1077,33 @@ private fun CockpitSearchOverlay(
             emptyList()
         }
         results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
+        searching = false
+    }
+
+    // The EXPLICIT search: bumped by the keyboard's search key or by the ⌕ button, never by typing.
+    // This is the only trigger allowed to spend a Nominatim request (SearchIntent.SUBMIT) — where the
+    // precise local answers (the barrio, the street number) come from.
+    LaunchedEffect(deepSearchTick) {
+        if (deepSearchTick == 0) return@LaunchedEffect
+        val q = deepSearchQuery
+        if (q.length < 2) return@LaunchedEffect
+        val bLat = biasLat
+        val bLon = biasLon
+        val near = if (bLat != null && bLon != null) dev.overtake.maps.model.GeoPoint(bLat, bLon) else null
+        searching = true
+        val net = try {
+            search.query(q, near, SearchIntent.SUBMIT)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            LogBus.log("[cockpit-search] ${e.message ?: e}")
+            emptyList()
+        }
+        // The rider kept typing while the precise provider was answering: that answer belongs to text
+        // that is no longer on screen, so drop it instead of painting a stale list over the live one.
+        if (query.trim() == q) {
+            results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
+        }
         searching = false
     }
 
@@ -986,7 +1130,31 @@ private fun CockpitSearchOverlay(
                     onValueChange = { query = it },
                     singleLine = true,
                     placeholder = { Text(stringResource(R.string.ovk_search_address_or_place)) },
+                    // Google/Waze: the keyboard's action key IS the old dialog's "Ir" — free text goes
+                    // straight to that app, so a place the autocomplete can't find is still reachable.
+                    // On Propio it is "Buscar": the deliberate action that runs the precise search.
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = if (handsToNavApp) ImeAction.Go else ImeAction.Search,
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onGo = { if (query.isNotBlank()) onSubmitText(query) },
+                        onSearch = { runDeepSearch() },
+                    ),
                     modifier = Modifier.weight(1f).focusRequester(focus),
+                )
+                // The explicit search. While typing, the list is served by the fast providers; this
+                // button is what asks the precise one — and the only thing allowed to (see
+                // SearchIntent / the Nominatim usage policy). Same ⌕ glyph as the map's search FAB.
+                GlyphBox("⌕", runDeepSearch)
+            }
+            // Where this destination is going. Only for the apps that own the navigation — on Propio the
+            // cockpit itself navigates, and saying "Ruta con Overtake" would be noise.
+            if (handsToNavApp) {
+                Text(
+                    stringResource(R.string.ovk_route_with, providerLabel),
+                    color = c.inkDim,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 6.dp),
                 )
             }
 
@@ -1019,6 +1187,20 @@ private fun CockpitSearchOverlay(
         }
     }
 }
+
+/**
+ * How long the rider has to STOP typing before the destination box asks the network (ms).
+ *
+ * 250 ms was too eager: at that setting a normal address ("villa del sol sector #2") fired several
+ * searches while being typed, each one a request the next keystroke made pointless. 420 ms is a
+ * comfortable typing pause without feeling laggy — and the list is NOT empty meanwhile: the rider's
+ * own places plus any cached answer are painted before this delay starts.
+ *
+ * Note what this debounce is NOT: it is not what keeps the app inside the Nominatim usage policy.
+ * That is `SearchIntent` — no amount of debouncing makes as-you-type Nominatim legal, so the typing
+ * path simply does not use it.
+ */
+private const val SEARCH_DEBOUNCE_MS = 420L
 
 /** How a suggestion reached the list — drives the leading glyph and the ranking boost. */
 private enum class SearchKind { HOME, FAVORITE, RECENT, RESULT }

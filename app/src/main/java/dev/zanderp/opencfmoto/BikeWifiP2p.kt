@@ -64,6 +64,17 @@ object BikeWifiP2p {
     @Volatile private var connectIssued = false
     @Volatile private var timeoutThread: Thread? = null
 
+    /** True only while Android reports an active Wi-Fi Direct group. */
+    val isConnected: Boolean get() = active && connected
+
+    /**
+     * True while a [connect] session is in flight or live — i.e. Wi-Fi Direct is the transport this
+     * hand-off is using AT ALL, whether or not the group is currently formed. Distinct from [isConnected]
+     * on purpose: a caller asking "can anything here answer whether the bike's transport is up?" needs
+     * THIS, and [fail]/[stop]/[park] all clear it, so a P2P join that failed over to SoftAP reads false.
+     */
+    val isSessionActive: Boolean get() = active
+
     /**
      * @param onConnected called with (phoneBindIp, bikeGatewayIp) once the group is formed and
      *   both addresses are known. Pass these straight to [EasyConnProber.start].
@@ -284,7 +295,12 @@ object BikeWifiP2p {
                         mgr.requestConnectionInfo(chan) { info ->
                             log("$TAG conn: groupFormed=${info.groupFormed} isGO=${info.isGroupOwner} " +
                                 "goAddr=${info.groupOwnerAddress?.hostAddress}")
-                            if (info.groupFormed && !connected) onGroupFormed(mgr, chan, info, onConnected, onFailed, log)
+                            if (info.groupFormed && !connected) {
+                                onGroupFormed(mgr, chan, info, onConnected, onFailed, log)
+                            } else if (!info.groupFormed && connected) {
+                                connected = false
+                                log("$TAG group lost")
+                            }
                         }
                     }
                 }
@@ -479,4 +495,3 @@ object BikeWifiP2p {
         }
     }
 }
-

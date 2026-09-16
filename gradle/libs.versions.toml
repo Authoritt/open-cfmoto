@@ -15,6 +15,7 @@ protobuf = "3.25.1"
 conscrypt = "2.5.3"
 osmdroid = "6.1.20"
 maplibre = "13.3.1"
+gson = "2.11.0"
 composeBom = "2025.06.00"
 kotlinCompose = "2.2.0"
 lifecycleCompose = "2.9.1"
@@ -36,6 +37,10 @@ androidx-camera-view = { group = "androidx.camera", name = "camera-view", versio
 jmdns = { group = "org.jmdns", name = "jmdns", version.ref = "jmdns" }
 protobuf-java = { group = "com.google.protobuf", name = "protobuf-java", version.ref = "protobuf" }
 conscrypt-android = { group = "org.conscrypt", name = "conscrypt-android", version.ref = "conscrypt" }
+# Explicit dep: EcBtpApInfo / ConnectionSpec use com.google.gson.Gson directly (Task 1/9 Rieju
+# connector) — previously only transitive via MapLibre. Declared so the JSON body builder is a
+# first-class dependency, not a fragile transitive.
+gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 osmdroid = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
 # OpenGL backend — more reliable on VirtualDisplay / Presentation than Vulkan default.
 maplibre = { group = "org.maplibre.gl", name = "android-sdk-opengl", version.ref = "maplibre" }
