@@ -45,7 +45,10 @@ import dev.zanderp.opencfmoto.AppSettings
 import dev.zanderp.opencfmoto.BuildConfig
 import dev.zanderp.opencfmoto.GarageActivity
 import dev.zanderp.opencfmoto.MainActivity
+import dev.zanderp.opencfmoto.DashHtmlPanel
+import dev.zanderp.opencfmoto.HtmlPanelPreview
 import dev.zanderp.opencfmoto.MapLibreVdProbe
+import dev.zanderp.opencfmoto.WebViewVdProbe
 import android.net.Uri
 import dev.zanderp.opencfmoto.UpdateChecker
 import androidx.compose.ui.Alignment
@@ -159,6 +162,32 @@ fun SettingsScreen(nav: NavController) {
                 // dump the stream + a live frame-rate log. Tap again to stop early. Zero production impact.
                 ValueRow("MapLibre VD probe", "60s → logcat/.h264") {
                     val msg = MapLibreVdProbe.toggle(ctx)
+                    Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+                }
+                // SPIKE (throwaway): same harness, renderer swapped for a WebView — answers whether an
+                // HTML panel survives screen-off, or only LOOKS alive while Chromium throttles its JS.
+                ValueRow("WebView VD probe", "60s → logcat/.h264") {
+                    val msg = WebViewVdProbe.toggle(ctx)
+                    Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+                }
+                // DEV: render the dash from an HTML file instead of the native layout. Takes effect on
+                // the NEXT connect — the Presentation content is chosen when the pipeline starts.
+                var htmlPanel by remember { mutableStateOf(DashHtmlPanel.isEnabled(ctx)) }
+                ValueRow("Panel HTML en el tablero", if (htmlPanel) "activado" else "desactivado") {
+                    htmlPanel = !htmlPanel
+                    DashHtmlPanel.setEnabled(ctx, htmlPanel)
+                    val f = DashHtmlPanel.ensureSeeded(ctx)
+                    Toast.makeText(
+                        ctx,
+                        if (!htmlPanel) "Panel HTML desactivado — el tablero vuelve a su contenido normal"
+                        else "Panel HTML activado (se aplica al conectar).\n${f?.absolutePath ?: "no se pudo crear la carpeta"}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+                // Ensaya el panel SIN moto: mismo camino de producción, para editar el HTML y ver la
+                // recarga en un sitio donde hay adb — no en la cuneta.
+                ValueRow("Vista previa del panel HTML", "sin moto, 5 min") {
+                    val msg = HtmlPanelPreview.toggle(ctx)
                     Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                 }
                 // (The old SoftAP/P2P "new connection engine" A/B toggle was removed: the connection factory

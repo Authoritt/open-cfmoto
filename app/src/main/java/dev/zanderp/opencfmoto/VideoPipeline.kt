@@ -97,6 +97,9 @@ class VideoPipeline(
     private var inputSurface: Surface? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: Presentation? = null
+    /** DEV HTML panel: the WebView on the dash Presentation and the watcher that reloads it on edit. */
+    private var htmlPanelView: android.webkit.WebView? = null
+    private var htmlPanelWatcher: android.os.FileObserver? = null
     private var drainThread: Thread? = null
     private var aaCompositor: AaCompositor? = null
     /** Letterbox scaler for MediaProjection (whole-screen or single-app) → bike encoder. */
@@ -186,6 +189,12 @@ class VideoPipeline(
         if (projection != null) {
             log("[VIDEO] mirror mode (MediaProjection — whole screen or single app)")
             setupProjectionDisplay(projection)
+        } else if (probePresentationContent == null && DashHtmlPanel.isEnabled(context)) {
+            // DEV: the dash panel is an HTML file instead of a native layout. Ahead of the GPX branch
+            // on purpose — switching it on means "show me my panel", not "show me the map".
+            log("[VIDEO] HTML panel mode (Presentation)")
+            if (Looper.myLooper() == Looper.getMainLooper()) setupHtmlPanelPresentation()
+            else main.post { setupHtmlPanelPresentation() }
         } else if (GpxSession.active) {
             log("[VIDEO] GPX viewer mode (Presentation)")
             // Soft AA→Map often runs on the main thread — set up immediately so the first IDR
@@ -518,6 +527,63 @@ class VideoPipeline(
             main.post(ticker)
         } catch (e: Exception) {
             log("[VIDEO] display/presentation failed: $e")
+        }
+    }
+
+    /**
+     * DEV: own-content mode where the Presentation hosts an HTML panel ([DashHtmlPanel]) instead of a
+     * native layout. Same VirtualDisplay + encoder plumbing as [setupDisplayAndPresentation].
+     *
+     * A [android.os.FileObserver] on the panel folder reloads the page when the file changes, so the
+     * dash updates from an `adb push` with no reconnect and no reinstall — that loop is the whole point
+     * of the HTML panel, and without the watcher it would still cost a restart per edit.
+     */
+    private fun setupHtmlPanelPresentation() {
+        try {
+            val panel = DashHtmlPanel.ensureSeeded(context)
+                ?: run {
+                    log("[VIDEO] HTML panel: no panel file and the folder could not be created — keeping native content")
+                    setupDisplayAndPresentation(); return
+                }
+            val display = createOwnVirtualDisplay() ?: return
+            val pres = Presentation(context, display)
+            val host = FrameLayout(pres.context)
+            val wv = android.webkit.WebView(pres.context).apply {
+                setBackgroundColor(Color.BLACK)
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                // file:// is how the panel is loaded at all; it defaults to OFF from API 30.
+                settings.allowFileAccess = true
+            }
+            host.addView(wv, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            pres.setContentView(host)
+            pres.show()
+            presentation = pres
+            htmlPanelView = wv
+            wv.loadUrl("file://${panel.absolutePath}")
+            log("[VIDEO] HTML panel shown on virtual display ← ${panel.absolutePath}")
+
+            // Reload on edit. MODIFY alone misses the common "write to temp, rename over" shape that
+            // adb push and most editors use, so watch the folder for the moves/creates too.
+            val mask = android.os.FileObserver.CLOSE_WRITE or android.os.FileObserver.MOVED_TO or
+                android.os.FileObserver.CREATE
+            val watcher = object : android.os.FileObserver(DashHtmlPanel.dir(context), mask) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path == null || !path.endsWith(".html", ignoreCase = true)) return
+                    main.post {
+                        if (!running) return@post
+                        val f = DashHtmlPanel.resolve(DashHtmlPanel.dir(context)) ?: return@post
+                        log("[VIDEO] HTML panel changed ($path) — reloading")
+                        htmlPanelView?.loadUrl("file://${f.absolutePath}")
+                    }
+                }
+            }
+            watcher.startWatching()
+            htmlPanelWatcher = watcher
+        } catch (e: Exception) {
+            log("[VIDEO] HTML panel failed: $e — falling back to native content")
+            setupDisplayAndPresentation()
         }
     }
 
@@ -875,6 +941,14 @@ class VideoPipeline(
             try { onProbeStop?.invoke() } catch (_: Exception) {}
             try { gpxDashUi?.release() } catch (_: Exception) {}
             gpxDashUi = null
+            // The watcher stops FIRST: a reload posted after the Presentation is gone would touch a
+            // destroyed WebView.
+            try { htmlPanelWatcher?.stopWatching() } catch (_: Exception) {}
+            htmlPanelWatcher = null
+            try {
+                htmlPanelView?.let { (it.parent as? android.view.ViewGroup)?.removeView(it); it.destroy() }
+            } catch (_: Exception) {}
+            htmlPanelView = null
             try { presentation?.dismiss() } catch (_: Exception) {}
             presentation = null
             try { virtualDisplay?.release() } catch (_: Exception) {}
