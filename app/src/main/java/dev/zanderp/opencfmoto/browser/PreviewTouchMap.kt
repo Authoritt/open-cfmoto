@@ -27,9 +27,26 @@ object PreviewTouchMap {
         canvasH: Int,
     ): Pair<Int, Int>? {
         if (previewW <= 0 || previewH <= 0 || canvasW <= 0 || canvasH <= 0) return null
-        if (previewX < 0f || previewY < 0f || previewX > previewW || previewY > previewH) return null
-        val x = (previewX / previewW * canvasW).toInt().coerceIn(0, canvasW - 1)
-        val y = (previewY / previewH * canvasH).toInt().coerceIn(0, canvasH - 1)
+
+        // The compositor draws the canvas FITTED and CENTRED into the preview surface, so unless the
+        // two happen to share an aspect ratio there are black bars. Mapping through the whole view —
+        // which this did at first — puts every touch off by the height of a bar: aiming at the zoom
+        // button on Google Maps produced canvas y=259 where the button sits at y≈357, and nothing
+        // ever responded. Measured, not guessed.
+        val scale = minOf(previewW.toFloat() / canvasW, previewH.toFloat() / canvasH)
+        val drawW = canvasW * scale
+        val drawH = canvasH * scale
+        val offX = (previewW - drawW) / 2f
+        val offY = (previewH - drawH) / 2f
+
+        val rx = previewX - offX
+        val ry = previewY - offY
+        // Outside the drawn image (i.e. on a black bar) is rejected, never clamped: a clamp would turn
+        // a touch on the bezel into a real tap at the canvas edge.
+        if (rx < 0f || ry < 0f || rx > drawW || ry > drawH) return null
+
+        val x = (rx / drawW * canvasW).toInt().coerceIn(0, canvasW - 1)
+        val y = (ry / drawH * canvasH).toInt().coerceIn(0, canvasH - 1)
         return x to y
     }
 }
