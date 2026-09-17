@@ -112,21 +112,78 @@ class GoogleMapsScrapeTest {
         assertEquals("Taller de Motos Darío Cali", unlabelled.name)
     }
 
+    /**
+     * Five cards captured VERBATIM from the phone. The owner asked for it plainly: "google te da el
+     * nombre y la direccion, podemos mostrar ambas cosas en cada registro del listado".
+     */
     @Test
-    fun `the card text becomes one line, without the repeated name`() {
-        // Measured verbatim: Google prints the name twice before anything useful.
-        val card = "Taller de Motos Darío Cali|Taller de Motos Darío Cali|4.4(54)|" +
-            "Taller de reparación de motos · Cl. 42"
+    fun `the street comes out of the card`() {
         assertEquals(
-            "4.4(54) · Taller de reparación de motos · Cl. 42",
-            GoogleMapsScrape.subtitleOf(card, "Taller de Motos Darío Cali"),
+            "Calle 70 N No. 2 A - 280",
+            GoogleMapsScrape.addressOf(
+                "ALMOTORES JAC|Patrocinado||ALMOTORES JAC|4.4(336)|" +
+                    "Concesionario de autos · Calle 70 N No. 2 A - 280|" +
+                    "Abierto · Cierra a las 6 p.m. · 315 7267085||Sitio web||Indicaciones| | |Taller",
+            ),
+        )
+        // An EMPTY piece between category and street: "Taller mecanico -  - Cl. 48 #90 - 59".
+        assertEquals(
+            "Cl. 48 #90 - 59",
+            GoogleMapsScrape.addressOf(
+                "Autospeed Taller Automotriz Cali|Autospeed Taller Automotriz Cali|4.1(69)|" +
+                    "Taller mecánico ·  · Cl. 48 #90 - 59|" +
+                    "Abierto · Cierra a las 8 p.m. · 317 0452626||Indicaciones| |",
+            ),
+        )
+        assertEquals(
+            "Cl. 50",
+            GoogleMapsScrape.addressOf(
+                "Taller de bicicletas la Espadaña Montallantas|Taller de bicicletas la Espadaña " +
+                    "Montallantas|4.1(45)|Taller mecánico · Cl. 50|Abierto · Cierra a las 6 p.m.",
+            ),
+        )
+        // No rating ("No hay opiniones") AND a name that itself contains the separator.
+        assertEquals(
+            "Av. 6a Nte. #35 - 00",
+            GoogleMapsScrape.addressOf(
+                "Car Center | Cali Norte|Car Center | Cali Norte|No hay opiniones|" +
+                    "Taller mecánico · Av. 6a Nte. #35 - 00|Abierto · Cierra a las 9 p.m.||Sitio web",
+            ),
         )
     }
 
+    /**
+     * The hours line also carries " - " separators, so a place with no street would be labelled with
+     * its closing time or its phone number. Both shapes are measured, both are refused.
+     */
     @Test
-    fun `a card with nothing but the name has no subtitle`() {
-        assertNull(GoogleMapsScrape.subtitleOf("Solo el nombre|Solo el nombre", "Solo el nombre"))
-        assertNull(GoogleMapsScrape.subtitleOf(null, "x"))
+    fun `an hour or a phone is not a street`() {
+        assertNull(GoogleMapsScrape.addressOf("X|X|4.0(3)|Abierto · Cierra a las 9 p.m."))
+        assertNull(GoogleMapsScrape.addressOf("X|X|4.0(3)|Abierto · Cierra a las 5:30 p.m."))
+        assertNull(GoogleMapsScrape.addressOf("X|X|Abierto las 24 horas · 312 2410588"))
+        assertNull(GoogleMapsScrape.addressOf("X|X|sin ningún separador"))
+        assertNull(GoogleMapsScrape.addressOf(null))
+    }
+
+    /** The place page labels its street for screen readers, and the label is translated. */
+    @Test
+    fun `the screen-reader label is cut off the street`() {
+        assertEquals(
+            "Cl. 38 Nte., Cali, Valle del Cauca",
+            GoogleMapsScrape.cleanAddressLabel("Dirección: Cl. 38 Nte., Cali, Valle del Cauca"),
+        )
+        assertEquals("Cl. 38 Nte.", GoogleMapsScrape.cleanAddressLabel("Address: Cl. 38 Nte."))
+        // A street with no label survives untouched, and a long prefix is NOT a label.
+        assertEquals("Cl. 38 Nte. 5-20", GoogleMapsScrape.cleanAddressLabel("Cl. 38 Nte. 5-20"))
+        assertNull(GoogleMapsScrape.cleanAddressLabel(""))
+        assertNull(GoogleMapsScrape.cleanAddressLabel(null))
+    }
+
+    @Test
+    fun `the single match carries its street`() {
+        val hit = GoogleMapsScrape.singleHit(chipichapeUrl, "Dirección: Cl. 38 Nte., Cali, Valle del Cauca")!!
+        assertEquals("Centro Comercial Chipichape", hit.name)
+        assertEquals("Cl. 38 Nte., Cali, Valle del Cauca", hit.subtitle)
     }
 
     @Test

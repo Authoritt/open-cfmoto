@@ -69,7 +69,10 @@ object GooglePlaceSearch {
               s: art ? (art.innerText || '').replace(/\n/g,'|').slice(0,200) : ''
             });
           }
-          return JSON.stringify({ u: location.href, r: out });
+          var addr = '';
+          var ae = document.querySelector('[data-item-id="address"]');
+          if (ae) addr = (ae.getAttribute('aria-label') || ae.textContent || '').trim().slice(0,140);
+          return JSON.stringify({ u: location.href, a: addr, r: out });
         })();
     """.trimIndent()
 
@@ -106,7 +109,7 @@ object GooglePlaceSearch {
             }
             // No list: `?api=1&query=` and an unambiguous search both land straight on a place page,
             // and then the settled url IS the answer.
-            GoogleMapsScrape.singleHit(obj.optString("u"))?.let {
+            GoogleMapsScrape.singleHit(obj.optString("u"), obj.optString("a"))?.let {
                 LogBus.log("[GSEARCH] $q -> 1 sitio exacto (${it.name})")
                 return Result.Found(listOf(it))
             }

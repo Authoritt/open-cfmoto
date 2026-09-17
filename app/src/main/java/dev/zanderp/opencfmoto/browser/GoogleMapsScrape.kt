@@ -36,7 +36,7 @@ import java.net.URLEncoder
  */
 object GoogleMapsScrape {
 
-    /** One result: what the rider reads and where it is. */
+    /** One result: what the rider reads, its street, and where it is. */
     data class Hit(val name: String, val lat: Double, val lon: Double, val subtitle: String?)
 
     /**
@@ -106,7 +106,7 @@ object GoogleMapsScrape {
         val name = label?.trim()?.takeIf { it.isNotEmpty() }
             ?: placeNameOf(href)
             ?: return null
-        return Hit(name, lat, lon, subtitleOf(articleText, name))
+        return Hit(name, lat, lon, addressOf(articleText))
     }
 
     /**
@@ -114,25 +114,58 @@ object GoogleMapsScrape {
      * directly on a place page with no list at all, and then the settled URL IS the answer. Measured:
      * `/maps/place/Centro+Comercial+Chipichape/@3.4759489,-76.5276424,17z/data=…!3d3.4759489!4d-76.5276424`.
      */
-    fun singleHit(settledUrl: String): Hit? {
+    fun singleHit(settledUrl: String, addressLabel: String? = null): Hit? {
         if (!settledUrl.contains("/maps/place/")) return null
         val (lat, lon) = coordsOf(settledUrl) ?: return null
         val name = placeNameOf(settledUrl) ?: return null
-        return Hit(name, lat, lon, null)
+        return Hit(name, lat, lon, cleanAddressLabel(addressLabel))
     }
 
     /**
-     * The result card's text → one readable line under the name.
-     *
-     * Google repeats the name (twice, measured) before the useful part, so the name is dropped and what
-     * is left — rating, category, street — is joined. Two pieces, because this is read at a glance.
+     * The place page keeps its street on an element Google labels for screen readers, so it arrives as
+     * "Direccion: Cl. 38 Nte., Cali, Valle del Cauca" (measured) — the prefix is the label, not the
+     * address, and it is translated, so it is cut by SHAPE rather than by matching a word.
      */
-    fun subtitleOf(articleText: String?, name: String): String? {
+    fun cleanAddressLabel(raw: String?): String? {
+        val s = raw?.trim().orEmpty()
+        if (s.isEmpty()) return null
+        val i = s.indexOf(": ")
+        val out = if (i in 1..24) s.substring(i + 2).trim() else s
+        return out.takeIf { it.isNotEmpty() }
+    }
+
+    /** "5:30 p.m." / "9 p.m." — the opening-hours line, which is not a street. */
+    private val HOURS = Regex("""(\d{1,2}:\d{2})|([ap])\.\s?m\.""", RegexOption.IGNORE_CASE)
+
+    /** "315 7267085" — the phone that closes the hours line. */
+    private val PHONE = Regex("""^[\d ()+\-]{7,}$""")
+
+    /**
+     * The result card's text → the STREET, which is what the rider asked to see next to the name.
+     *
+     * Measured card, verbatim:
+     * ```
+     * ALMOTORES JAC|Patrocinado||ALMOTORES JAC|4.4(336)|Concesionario de autos · Calle 70 N No. 2 A - 280|
+     * Abierto · Cierra a las 6 p.m. · 315 7267085||Sitio web||Indicaciones| | |Taller Especializado JAC
+     * ```
+     * The street is what follows the LAST " · " of the first line that has one — the category sits in
+     * front of it, sometimes with an empty piece in between ("Taller mecánico ·  · Cl. 48 #90 - 59").
+     *
+     * The hours line ALSO contains " · ", and a place with no street would otherwise be labelled
+     * "Cierra a las 9 p.m." or with a phone number. So a candidate that reads as an hour or a phone is
+     * refused and the next line is tried; if none is left, the row simply has no street. Both shapes
+     * come from the measurement, not from imagination.
+     */
+    fun addressOf(articleText: String?): String? {
         val raw = articleText ?: return null
-        val parts = raw.split('|')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.equals(name, ignoreCase = true) }
-        if (parts.isEmpty()) return null
-        return parts.take(2).joinToString(" · ").takeIf { it.isNotEmpty() }
+        for (part in raw.split('|').map { it.trim() }) {
+            if (!part.contains(" · ")) continue
+            val candidate = part.substringAfterLast(" · ").trim()
+            if (candidate.isEmpty()) continue
+            if (HOURS.containsMatchIn(candidate)) continue
+            if (PHONE.matches(candidate)) continue
+            return candidate
+        }
+        return null
     }
 }
