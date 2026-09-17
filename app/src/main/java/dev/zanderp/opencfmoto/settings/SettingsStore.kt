@@ -42,6 +42,16 @@ val MapProvider.rendersNativeMap: Boolean
     get() = this == MapProvider.BUILTIN || this == MapProvider.BUILTIN_GSEARCH
 
 /**
+ * Pintamos NOSOTROS lo que va al tablero con este proveedor.
+ *
+ * Google y Waze no: los pinta Android Auto, y el espejo necesita antes el consentimiento de captura.
+ * Para esos, cambiar de mapa no es re-armar contenido sino cambiar el MODO de conexion, asi que
+ * reconstruirles el pipeline por su cuenta dejaria el tablero en negro.
+ */
+val MapProvider.paintedByUs: Boolean
+    get() = rendersNativeMap || this == MapProvider.WEB
+
+/**
  * Which engine renders the built-in dash map projected to the bike (VirtualDisplay → H.264).
  * MAPLIBRE (default) is the premium vector + 3D look and is PROVEN clean on that encoder path — it
  * keeps rendering even with the phone screen OFF (probe commit 0c5b7c8). OSMDROID is the classic
@@ -127,6 +137,11 @@ class SettingsStore(private val context: Context) {
     suspend fun setMapProviderMirrored(p: MapProvider) {
         setMapProvider(p)
         dev.zanderp.opencfmoto.browser.DashBrowserPrefs.setEnabled(context, p == MapProvider.WEB)
+        // Y decirselo al tablero, que si no no se entera. VideoPipeline lee el proveedor UNA vez, al
+        // arrancar la proyeccion: hasta ahora cambiar de mapa con la moto conectada no hacia nada
+        // hasta desconectar y volver a conectar. Re-armar NO toca PXC ni el Wi-Fi -- es la misma
+        // maquinaria del salto AA->Mapa, que lleva tiempo funcionando en la moto.
+        if (p.paintedByUs) dev.zanderp.opencfmoto.BikeLink.requestDashRearm("cambio de mapa a ${p.name}")
     }
 
     suspend fun setMapProvider(p: MapProvider) = edit { it[Keys.mapProvider] = p.name }
