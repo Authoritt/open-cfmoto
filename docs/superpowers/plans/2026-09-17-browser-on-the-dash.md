@@ -40,6 +40,41 @@ surfaces funnel through `GpxSession.dispatchTouch`, which already dispatches `Mo
 
 ---
 
+## Estado — 17/09/2026, build 99
+
+Lo que ya esta y **verificado en el telefono** (captura o lectura del dispositivo, no commit):
+
+- **Tareas 2, 3, 4, 5, 7: hechas.** El navegador arranca, carga Google Maps con la UI de escritorio,
+  se toca, se escribe, busca texto libre y navega a cualquier sitio (`facebook.com` cargo su login).
+- **El navegador no depende de la moto.** `DashBrowserHost` lo posee; el tablero y el telefono son dos
+  salidas opcionales del mismo compositor. Esto NO estaba en el plan: el plan lo colgaba de
+  `VideoPipeline`, y asi no funcionaba sin moto.
+- **Geolocalizacion:** pedir ruta ofrece "Tu ubicacion" y calcula 23 min / 11,4 km desde la posicion
+  real. Antes decia que no podia acceder a la ubicacion.
+- **`adb pull` a una ruta LOCAL de Windows tambien necesita `MSYS_NO_PATHCONV=1`**, o Git Bash reescribe
+  el destino. La constante de arriba solo hablaba del lado del dispositivo; corta por los dos lados.
+- **Instalar en este telefono exige `assembleRelease`**, no `assembleDebug`: el que hay instalado esta
+  firmado con la llave de release del fork y un APK de debug rebota con
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+
+Lo que **no se ha visto nunca**: nada de esto ha pasado por la moto. El empalme
+navegador -> encoder -> PXC -> tablero no se ha ejecutado ni una vez.
+
+### Lo que queda, en orden
+
+1. **Tarea 1** (mide en la moto): sobrevive PXC sin el pin de proceso, y tiene internet el WebView
+   mientras esta conectado.
+2. **Tarea 6**: implementar 6A (sin pin) o 6B (`shouldInterceptRequest`, con su agujero conocido en los
+   POST) segun lo que diga la Tarea 1.
+3. **Tarea 8**: la verificacion de campo completa.
+
+Una duda abierta que solo la moto resuelve: el navegador se dibuja a 1024x464 y el compositor lo AJUSTA
+al lienzo que reporte la moto. Si la moto reporta ese mismo tamano es 1:1; si reporta otro, se vera
+escalado y habra que redimensionar la pantalla virtual al conectar. No se implementa a ciegas: primero
+hay que leer que tamano reporta.
+
+---
+
 ### Task 1: Decide the networking route by measurement
 
 The spec has two candidate solutions and says which one is right is a measurement. Do this first: Task 6
