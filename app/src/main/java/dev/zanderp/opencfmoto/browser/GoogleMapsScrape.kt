@@ -60,9 +60,22 @@ object GoogleMapsScrape {
      * The path form on purpose. The rider's own words for why: "poner una direccion o nombre de lugar
      * puede dar multiples lugares" — and `?api=1&query=` collapses exactly that into one guess.
      */
-    fun searchUrl(query: String): String =
-        "https://www.google.com/maps/search/" +
+    fun searchUrl(query: String, lat: Double? = null, lon: Double? = null): String {
+        val base = "https://www.google.com/maps/search/" +
             URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20")
+        if (lat == null || lon == null) return base
+        // The viewport, and it does more than order the answers. MEASURED: without it, "chipichape"
+        // made Google jump straight to the shopping centre and there was no list at ANY moment -- the
+        // owner, searching the same word in his own Maps, got four (the mall, a Bogota neighbourhood,
+        // Chipichape Living, Chipichape Gardens). His Maps knew where he was; ours did not.
+        return "$base/@" + fmt(lat) + "," + fmt(lon) + "," + CITY_ZOOM + "z"
+    }
+
+    /** City-wide: near enough to rank by proximity, wide enough that rivals stay on screen. */
+    private const val CITY_ZOOM = 12
+
+    /** Locale-free: String.format would write "3,37" in es-CO and Google would read a different place. */
+    private fun fmt(v: Double): String = ((v * 1e7).toLong() / 1e7).toString()
 
     /** Pin first, viewport second, nothing third. Null Island is treated as "nothing": see [valid]. */
     fun coordsOf(url: String): Pair<Double, Double>? {

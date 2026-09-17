@@ -1233,7 +1233,7 @@ private fun CockpitSearchOverlay(
             // El ORDEN de Google es la razon de ser de este proveedor, asi que NO se re-ordena:
             // rankPicks puntuaria estos resultados con nuestra mezcla y desharia en silencio justo lo
             // que el dueno pidio ("ese busca mejor").
-            val g = dev.zanderp.opencfmoto.browser.GooglePlaceSearch.search(ctx, q)
+            val g = dev.zanderp.opencfmoto.browser.GooglePlaceSearch.search(ctx, q, bLat, bLon)
             if (query.trim() == q) {
                 // Reclamado incluso cuando Google no encontro nada: si no, el escalon de teclear
                 // pintaria SUS resultados debajo del aviso "Google no encontro nada", que es peor que

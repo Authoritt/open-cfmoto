@@ -194,4 +194,26 @@ class GoogleMapsScrapeTest {
         // the list, so this must never go back to it.
         assertTrue("the search must not use the single-place form", !u.contains("api=1"))
     }
+
+    /**
+     * The rider's position travels with the query, so a workshop two streets away outranks one across
+     * the city. Written locale-free on purpose: String.format writes "3,37" in es-CO and Google would
+     * read a different point.
+     *
+     * What this does NOT do, measured three times: force a list. With no bias, with this bias, and
+     * with a mobile user-agent, "chipichape" still made Google jump straight to the shopping centre.
+     */
+    @Test
+    fun `the rider position rides along, with a dot for a decimal separator`() {
+        val u = GoogleMapsScrape.searchUrl("taller", 3.3702983, -76.5186766)
+        assertEquals(
+            "https://www.google.com/maps/search/taller/@3.3702983,-76.5186766,12z",
+            u,
+        )
+        // Half a position is no position: a lone latitude must not build a broken viewport.
+        assertEquals(
+            "https://www.google.com/maps/search/taller",
+            GoogleMapsScrape.searchUrl("taller", 3.37, null),
+        )
+    }
 }

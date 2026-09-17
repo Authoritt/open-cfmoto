@@ -64,13 +64,14 @@ object DashBrowserHost {
      * Bring the browser up if it is not already. Safe to call repeatedly and from any thread; the
      * display/Presentation work is posted to the main thread because a Presentation is a Dialog.
      */
-    fun ensureStarted(context: Context) {
+    fun ensureStarted(context: Context, initialUrl: String? = null) {
         if (webView != null) return
         val app = context.applicationContext
-        if (Looper.myLooper() == Looper.getMainLooper()) startOnMain(app) else main.post { startOnMain(app) }
+        if (Looper.myLooper() == Looper.getMainLooper()) startOnMain(app, initialUrl)
+        else main.post { startOnMain(app, initialUrl) }
     }
 
-    private fun startOnMain(app: Context) {
+    private fun startOnMain(app: Context, initialUrl: String? = null) {
         if (webView != null) return
         try {
             val comp = AaCompositor(LogBus::log).also { it.start(bufferW = canvasW, bufferH = canvasH) }
@@ -111,7 +112,12 @@ object DashBrowserHost {
             pres.show()
             presentation = pres
             webView = wv
-            wv.loadUrl(DashBrowser.HOME_URL)
+            // The FIRST page, and not always the home one. A search that starts the browser used to
+            // load Google Maps home and only then ask for the search url -- except the second call
+            // arrived while webView was still null and was dropped on the floor, so the search polled
+            // the home page until it timed out. Measured: the first search after a cold start failed
+            // at 15,3 s; the second answered in 2,4 s.
+            wv.loadUrl(initialUrl ?: DashBrowser.HOME_URL)
             // Dash touches land 1:1 — the WebView is laid out at exactly the canvas size.
             GpxSession.setTouchTarget(wv)
             LogBus.log("[BROWSER] up on its own display ${canvasW}x$canvasH (no bike needed)")

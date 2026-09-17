@@ -76,14 +76,25 @@ object GooglePlaceSearch {
         })();
     """.trimIndent()
 
-    suspend fun search(context: Context, query: String, timeoutMs: Long = 15_000L): Result {
+    suspend fun search(
+        context: Context,
+        query: String,
+        lat: Double? = null,
+        lon: Double? = null,
+        timeoutMs: Long = 15_000L,
+    ): Result {
         val q = query.trim()
         if (q.length < 2) return Result.Empty
 
-        DashBrowserHost.ensureStarted(context)
-        eval(STAMP_JS)
-        val url = GoogleMapsScrape.searchUrl(q)
-        DashBrowserHost.load(url)
+        val url = GoogleMapsScrape.searchUrl(q, lat, lon)
+        // If the browser is not up yet it is started ON the search, because a load() issued while the
+        // WebView is still being built goes nowhere.
+        val wasRunning = DashBrowserHost.isRunning
+        DashBrowserHost.ensureStarted(context, url)
+        if (wasRunning) {
+            eval(STAMP_JS)
+            DashBrowserHost.load(url)
+        }
         LogBus.log("[GSEARCH] $q -> $url")
 
         val start = SystemClock.uptimeMillis()
