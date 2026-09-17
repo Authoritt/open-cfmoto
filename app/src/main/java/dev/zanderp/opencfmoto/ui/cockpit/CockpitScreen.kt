@@ -1027,13 +1027,20 @@ private fun Context.findActivity(): Activity? {
     return null
 }
 
-private fun providerLabel(ctx: Context, p: MapProvider): String = when (p) {
+/**
+ * The ONE place a provider becomes a word the rider reads. Shared (not private) because the Tablero
+ * tile used to carry the literal "Overtake" hardcoded: it said Overtake while the cockpit was showing
+ * Google, Espejo or the browser. A second hand-written label is the same bug the selector already had.
+ *
+ * Exhaustive on purpose -- no `else`. The `else` that used to be here would have labelled the browser
+ * "Overtake", and it would do the same to whatever provider comes next, without a word of complaint.
+ */
+internal fun providerLabel(ctx: Context, p: MapProvider): String = when (p) {
     MapProvider.GOOGLE -> "Google Maps" // brand name — not translated
     MapProvider.WAZE -> "Waze" // brand name — not translated
     MapProvider.MIRROR -> ctx.getString(R.string.ovk_provider_mirror)
-    // Named explicitly: the `else` below would have labelled the browser "Overtake".
     MapProvider.WEB -> ctx.getString(R.string.ovk_provider_web)
-    else -> "Overtake" // BUILTIN — the native map, branded "Overtake" (label only; enum stays BUILTIN)
+    MapProvider.BUILTIN -> "Overtake" // the native map, branded "Overtake" (label only; enum stays BUILTIN)
 }
 
 /**
