@@ -358,6 +358,25 @@ object DashBrowserHost {
         )
     }
 
+    /**
+     * Send the browser to [url] verbatim, with no "is this a URL or a search?" guessing.
+     *
+     * [navigate] is for what the rider typed; this is for a URL WE built, and running it through the
+     * omnibox heuristic would be a silent chance to mangle it.
+     */
+    internal fun load(url: String) {
+        webView?.let { wv -> wv.post { wv.loadUrl(url) } }
+    }
+
+    /** Run [js] in the page and hand back what it returned (JSON-encoded, as WebView gives it). */
+    internal fun evaluate(js: String, onResult: (String?) -> Unit) {
+        val wv = webView ?: run { onResult(null); return }
+        wv.post {
+            runCatching { wv.evaluateJavascript(js) { onResult(it) } }
+                .onFailure { onResult(null) }
+        }
+    }
+
     fun stop() {
         main.post {
             try { GpxSession.clearTouchTarget() } catch (_: Exception) {}
