@@ -334,7 +334,7 @@ fun CockpitApp(startRoute: String? = null, startDestination: String = Routes.DAS
             // The canvas comes from the LIVE pipeline, not from BikeProfileHolder: the profile carries
             // no canvas size, the bike reports its own at connect time. The fallback only applies
             // before a pipeline exists, when the preview has nothing to show anyway.
-            val (cw, ch) = dev.zanderp.opencfmoto.VideoPipelineHolder.canvasSize() ?: (1024 to 464)
+            val (cw, ch) = dev.zanderp.opencfmoto.browser.DashBrowserHost.canvasSize()
             BrowserControlScreen(nav, canvasW = cw, canvasH = ch)
         }
     }

@@ -101,17 +101,16 @@ class VideoPipeline(
     private var htmlPanelView: android.webkit.WebView? = null
     private var htmlPanelWatcher: android.os.FileObserver? = null
 
-    /** WEB provider: the projected browser and the GL stage that fans its frames out. */
-    internal var browserView: android.webkit.WebView? = null
-    internal var browserCompositor: AaCompositor? = null
-
     /**
-     * The negotiated bike canvas, so UI can size a preview without guessing. `BikeProfile` does NOT
-     * carry a canvas size — the bike reports its own at connect time, so this pipeline is the only
-     * place that knows it.
+     * WEB provider: whether THIS pipeline handed its encoder to the browser.
+     *
+     * The browser itself is not here any more -- DashBrowserHost owns it and outlives every
+     * connection. What the pipeline still owns is the encoder surface it lent, so this flag says
+     * whether there is something to hand back on stop (and whether the screen wake taken at setup is
+     * this pipeline's to release).
      */
-    internal val canvasWidth: Int get() = width
-    internal val canvasHeight: Int get() = height
+    private var browserAttached = false
+
     private var drainThread: Thread? = null
     private var aaCompositor: AaCompositor? = null
     /** Letterbox scaler for MediaProjection (whole-screen or single-app) → bike encoder. */
@@ -563,52 +562,25 @@ class VideoPipeline(
      * Any failure falls back to the existing native content rather than leaving a black dash.
      */
     private fun setupBrowserPresentation() {
-        var comp: AaCompositor? = null
         try {
             val encSurface = inputSurface ?: run {
                 log("[VIDEO] browser: no encoder surface yet — keeping native content")
                 setupDisplayAndPresentation(); return
             }
-            comp = AaCompositor(log).also { it.start(bufferW = width, bufferH = height) }
-            val input = comp.inputSurface ?: run {
-                log("[VIDEO] browser: compositor gave no input surface — keeping native content")
-                comp.release(); setupDisplayAndPresentation(); return
-            }
-            comp.setOutput(encSurface, width, height, width, height, ScreenFit.STRETCH)
-            browserCompositor = comp
-
-            val display = createOwnVirtualDisplay(target = input) ?: run {
-                comp.release(); browserCompositor = null; return
-            }
-            val pres = Presentation(context, display)
-            val host = FrameLayout(pres.context)
-            val wv = dev.zanderp.opencfmoto.browser.DashBrowser.create(pres.context) { title ->
-                log("[VIDEO] browser: $title")
-            }
-            host.addView(
-                wv,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                ),
-            )
-            pres.setContentView(host)
-            pres.show()
-            presentation = pres
-            browserView = wv
-            VideoPipelineHolder.set(this)
-            wv.loadUrl(dev.zanderp.opencfmoto.browser.DashBrowser.HOME_URL)
-            // Dash touches land here 1:1 — the WebView is laid out at exactly the canvas size.
-            GpxSession.setTouchTarget(wv)
+            // The browser is NOT created here. It lives in DashBrowserHost, independent of any
+            // connection, so the rider can use it with no bike at all — this only hands it one more
+            // output. Projection stopping must never destroy the page they were reading.
+            dev.zanderp.opencfmoto.browser.DashBrowserHost.ensureStarted(context)
+            dev.zanderp.opencfmoto.browser.DashBrowserHost.attachEncoder(encSurface, width, height)
+            // A previous pipeline stop cleared the shared touch target; the dash needs it back.
+            dev.zanderp.opencfmoto.browser.DashBrowserHost.reassertDashTouchTarget()
             // Same wake the map takes. Without it the WifiNetworkSpecifier request is released the
             // moment the app stops being visible, and every PXC socket dies at once.
             AndroidAutoService.setGpxScreenWake(context, true)
-            log("[VIDEO] browser shown on virtual display ${width}x$height (compositor fan-out)")
+            browserAttached = true
+            log("[VIDEO] browser attached to the encoder ${width}x$height (host owns the page)")
         } catch (e: Exception) {
-            log("[VIDEO] browser failed: $e — keeping native content")
-            try { comp?.release() } catch (_: Exception) {}
-            browserCompositor = null
-            browserView = null
+            log("[VIDEO] browser attach failed: $e — keeping native content")
             setupDisplayAndPresentation()
         }
     }
@@ -1026,7 +998,7 @@ class VideoPipeline(
         // abandonNavigation=false and must not drop the screen wake before GPX attaches.
         // …and the HTML panel counts as "this was the Presentation itself": it takes the same wake, so
         // it must hand it back, or a stopped panel would keep the FGS alive for nothing.
-        if (abandonNavigation || gpxDashUi != null || htmlPanelView != null || browserView != null) {
+        if (abandonNavigation || gpxDashUi != null || htmlPanelView != null || browserAttached) {
             AndroidAutoService.setGpxScreenWake(context, false)
         }
         GpxSession.clearTouchTarget()
@@ -1046,22 +1018,6 @@ class VideoPipeline(
             // destroyed WebView.
             try { htmlPanelWatcher?.stopWatching() } catch (_: Exception) {}
             htmlPanelWatcher = null
-            // The browser: clear the touch target FIRST — a MotionEvent already posted by the dash
-            // would otherwise land on a destroyed WebView.
-            if (browserView != null) {
-                try { GpxSession.clearTouchTarget() } catch (_: Exception) {}
-                try {
-                    browserView?.let {
-                        it.loadUrl("about:blank")
-                        (it.parent as? android.view.ViewGroup)?.removeView(it)
-                        it.destroy()
-                    }
-                } catch (_: Exception) {}
-                browserView = null
-                try { browserCompositor?.release() } catch (_: Exception) {}
-                browserCompositor = null
-                VideoPipelineHolder.set(null)
-            }
             try {
                 htmlPanelView?.let { (it.parent as? android.view.ViewGroup)?.removeView(it); it.destroy() }
             } catch (_: Exception) {}
@@ -1070,6 +1026,14 @@ class VideoPipeline(
             presentation = null
             try { virtualDisplay?.release() } catch (_: Exception) {}
             virtualDisplay = null
+        }
+        // The browser is NOT torn down here: DashBrowserHost owns it and the rider keeps browsing on
+        // the phone after the bike goes away. What must be undone is the loan of the encoder surface,
+        // and it has to happen HERE -- synchronously, before inputSurface.release() a few lines down --
+        // not inside the main.post above, which runs later and would free the surface first.
+        if (browserAttached) {
+            try { dev.zanderp.opencfmoto.browser.DashBrowserHost.detachEncoder() } catch (_: Exception) {}
+            browserAttached = false
         }
         try { codec?.stop() } catch (_: Exception) {}
         try { codec?.release() } catch (_: Exception) {}

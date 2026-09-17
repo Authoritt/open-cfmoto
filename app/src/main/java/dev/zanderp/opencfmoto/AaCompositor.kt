@@ -197,6 +197,35 @@ class AaCompositor(private val log: (String) -> Unit) {
     }
 
     /**
+     * Detach the bike encoder. Blocks until the GL thread has destroyed the EGL surface, exactly like
+     * [clearPreview] and for the same reason: the caller is about to release the underlying Surface
+     * (VideoPipeline.stop releases the encoder input), and an EGLSurface left pointing at a dead
+     * native window does not merely stop painting. [renderTo] would keep calling eglMakeCurrent on it,
+     * fail, and then issue GL calls with no valid context -- which also corrupts the phone preview
+     * drawn right after it in the same pass.
+     *
+     * Needed since the browser stopped belonging to the pipeline: the compositor now outlives the
+     * projection, so somebody has to hand the encoder back.
+     */
+    fun clearOutput() {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        handler.post {
+            try {
+                if (windowSurface != EGL14.EGL_NO_SURFACE) {
+                    EGL14.eglMakeCurrent(eglDisplay, pbuffer, pbuffer, eglContext)
+                    EGL14.eglDestroySurface(eglDisplay, windowSurface)
+                }
+            } catch (_: Exception) {
+            } finally {
+                windowSurface = EGL14.EGL_NO_SURFACE
+                canvasW = 0; canvasH = 0
+                latch.countDown()
+            }
+        }
+        try { latch.await(1, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+    }
+
+    /**
      * Attach an in-app phone preview surface (from [dev.zanderp.opencfmoto.HudViewActivity]'s
      * SurfaceView). The decoded AA frame is drawn aspect-fit into it. Forces one immediate redraw so
      * the preview shows the current (possibly static) frame right away instead of waiting for motion.
