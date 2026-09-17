@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -74,6 +76,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.NavLauncher
 import dev.zanderp.opencfmoto.settings.MapProvider
+import dev.zanderp.opencfmoto.ui.map.SELECTABLE_PROVIDERS
 import dev.zanderp.opencfmoto.settings.SettingsStore
 import kotlinx.coroutines.launch
 import android.Manifest
@@ -488,7 +491,16 @@ fun CockpitScreen(nav: NavController) {
     Box(Modifier.fillMaxSize().background(c.ground)) {
         // Base layer — the SELECTED renderer fills the whole surface. When the strict Mapsforge gate is
         // up (Mapsforge chosen but no offline `.map`), a "download a map" card takes the base instead.
-        if (needsMapsforgeMap) {
+        if (provider == MapProvider.WEB) {
+            // With the browser chosen there is no map and no Mapa|Panel: the cockpit IS the browser,
+            // full-bleed. It is a live view of the one browser on the dash display, so what you touch
+            // here is what the bike shows — and it needs no bike to be useful.
+            val (bw, bh) = dev.zanderp.opencfmoto.browser.DashBrowserHost.canvasSize()
+            AndroidView(
+                factory = { c2 -> browserSurface(c2, bw, bh) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (needsMapsforgeMap) {
             MapsforgeNeedsMapCard(
                 modifier = Modifier.fillMaxSize(),
                 onDownload = { nav.navigate(Routes.MAPSFORGE_MAPS) },
@@ -507,6 +519,18 @@ fun CockpitScreen(nav: NavController) {
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlyphBox("‹") { nav.popBackStack() }
+                if (provider == MapProvider.WEB) {
+                    // The browser's own address bar, in the slot the destination box uses otherwise.
+                    // Not extra chrome: an address bar is what makes a browser a browser — without it
+                    // the rider could only follow links from wherever the home page happens to be.
+                    BrowserAddressBar(
+                        modifier = Modifier.weight(1f),
+                        onGo = { typed -> dev.zanderp.opencfmoto.browser.DashBrowserHost.navigate(typed) },
+                    )
+                    ProviderChip(providerLabel(ctx, provider)) {
+                        scope.launch { store.setMapProviderMirrored(nextProvider(provider)) }
+                    }
+                } else {
                 DestinationBar(
                     providerLabel = providerLabel(ctx, provider),
                     modifier = Modifier.weight(1f),
@@ -514,14 +538,21 @@ fun CockpitScreen(nav: NavController) {
                     // Google/Waze, which the rider read as "a second popup instead of the box I was
                     // already using"). What changes with the provider is only what submit does.
                     onSearch = { showSearch = true },
-                    onCycleProvider = { scope.launch { store.setMapProviderMirrored(nextProvider(provider)) } },
+                    onCycleProvider = {
+                        // Choosing the browser IS opening it: no note, no intermediate button.
+                        // Just cycle: landing on WEB turns this very screen into the browser, so there
+                        // is nowhere to navigate to and no way to get stranded outside it.
+                        scope.launch { store.setMapProviderMirrored(nextProvider(provider)) }
+                    },
                 )
                 // Persistent day/night/auto toggle (compact) — flip the map look without leaving the map.
                 if (!needsMapsforgeMap) {
                     MapThemeToggle(compact = true, onThemeChanged = { night -> renderer.applyTheme(night) })
                 }
+                }
             }
-            ModeToggle(cockpitMode) { cockpitMode = it }
+            // No Mapa|Panel with the browser: there is no map to toggle against.
+            if (provider != MapProvider.WEB) ModeToggle(cockpitMode) { cockpitMode = it }
             // AA mode only: "Dash view" opens the LIVE Android Auto video (Google Maps / Waze exactly as
             // Android Auto is painting them on the bike dash) — the cockpit's own Compose screen, which
             // shows that video or nothing at all. It used to open the classic HudViewActivity, whose
@@ -534,7 +565,7 @@ fun CockpitScreen(nav: NavController) {
                 // the rider learns what choosing Google/Waze actually means: the dash is not ours to
                 // paint in that mode, and the order matters — bike first, destination after.
                 ProviderNote(stringResource(R.string.ovk_provider_aa_hint))
-                DashViewButton { nav.navigate(Routes.DASH_VIEW) }
+                ProviderActionButton(stringResource(R.string.ovk_dash_view)) { nav.navigate(Routes.DASH_VIEW) }
             }
             if (navState.active) NavCard(navState, Modifier.fillMaxWidth())
         }
@@ -544,7 +575,10 @@ fun CockpitScreen(nav: NavController) {
         // map stays clean (nav/call still surface when they matter). Bounded height: these panels contain
         // weight(1f) children, so without a height cap they'd fill the whole Box (opaque) and bury the
         // map + top controls. Cap them as bottom widgets.
+        // …and none of them with the browser: a browser has no now-playing strip and no route card.
+        // They are cockpit widgets, and in WEB mode this screen is not the cockpit, it is the page.
         when {
+            provider == MapProvider.WEB -> Unit
             callState.active -> CallCard(callState, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp))
             navigating -> NavProgressCard(
                 progress = navProgress,
@@ -558,7 +592,7 @@ fun CockpitScreen(nav: NavController) {
         // "▶ Iniciar recorrido" — shown only after a place is picked and before navigation starts. A
         // prominent ignition pill, centered + wrap-content so it clears the bottom-END locate FAB, lifted
         // above whatever bottom widget (music/call) is currently showing.
-        if (navDest != null && !navigating) {
+        if (provider != MapProvider.WEB && navDest != null && !navigating) {
             StartRideButton(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -571,6 +605,9 @@ fun CockpitScreen(nav: NavController) {
         // music panel, the ~190dp call card, or the shorter nav progress card) so it's never buried; in
         // clean Mapa mode it drops to the corner. While navigating it doubles as the re-center control
         // (osmdroid drops follow on a manual pan). Drawn before the search overlay so search covers it.
+        // …and none of these with the browser: "locate me", "re-centre" and "route overview" are map
+        // controls. On a web page they do nothing, and a button that does nothing is worse than absent.
+        if (provider != MapProvider.WEB) {
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -613,6 +650,7 @@ fun CockpitScreen(nav: NavController) {
                 }
             }
             LocateButton(following = following, modifier = Modifier, onClick = { locateMe() })
+        }
         }
 
         // The ONE destination box, for every provider — native autocomplete drawn over the map, no
@@ -709,8 +747,73 @@ private fun ProviderNote(text: String) {
     )
 }
 
+/**
+ * The browser's address bar — the one piece of chrome a browser cannot do without.
+ *
+ * Types a URL or a search, exactly like Chrome's omnibox: `facebook.com` navigates, `taller de motos`
+ * searches. Without it the rider can only follow links from wherever the home page left them, which is
+ * not a browser, it is a kiosk.
+ */
 @Composable
-private fun DashViewButton(onClick: () -> Unit) {
+private fun BrowserAddressBar(modifier: Modifier, onGo: (String) -> Unit) {
+    val c = LocalCockpitColors.current
+    var typed by remember { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
+    BasicTextField(
+        value = typed,
+        onValueChange = { typed = it },
+        singleLine = true,
+        textStyle = androidx.compose.ui.text.TextStyle(color = c.ink, fontSize = 14.sp),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(c.ignition),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+        keyboardActions = KeyboardActions(onGo = {
+            if (typed.isNotBlank()) onGo(typed)
+            keyboard?.hide()
+        }),
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(c.ground.copy(alpha = 0.92f))
+            .border(1.dp, c.line, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        decorationBox = { inner ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("⌕", color = c.ignition, fontSize = 14.sp)
+                Spacer(Modifier.width(8.dp))
+                Box(Modifier.weight(1f)) {
+                    if (typed.isEmpty()) {
+                        Text(
+                            stringResource(R.string.ovk_browser_address_hint),
+                            color = c.inkFaint,
+                            fontSize = 14.sp,
+                        )
+                    }
+                    inner()
+                }
+            }
+        },
+    )
+}
+
+/** The provider chip on its own, for the browser bar (the destination box carries its own otherwise). */
+@Composable
+private fun ProviderChip(label: String, onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(c.ground.copy(alpha = 0.92f))
+            .border(1.dp, c.line, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+    ) {
+        Text(label, color = c.ignition, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** The call-to-action under a provider note. Was `DashViewButton` with the label baked in; the browser
+ *  needs the same pill with different words, and one button with a label beats two identical ones. */
+@Composable
+private fun ProviderActionButton(label: String, onClick: () -> Unit) {
     val c = LocalCockpitColors.current
     Row(
         Modifier.fillMaxWidth()
@@ -723,7 +826,7 @@ private fun DashViewButton(onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "▸ " + stringResource(R.string.ovk_dash_view),
+            "▸ $label",
             color = c.ignition,
             fontWeight = FontWeight.SemiBold,
             fontSize = 13.sp,
@@ -928,6 +1031,8 @@ private fun providerLabel(ctx: Context, p: MapProvider): String = when (p) {
     MapProvider.GOOGLE -> "Google Maps" // brand name — not translated
     MapProvider.WAZE -> "Waze" // brand name — not translated
     MapProvider.MIRROR -> ctx.getString(R.string.ovk_provider_mirror)
+    // Named explicitly: the `else` below would have labelled the browser "Overtake".
+    MapProvider.WEB -> ctx.getString(R.string.ovk_provider_web)
     else -> "Overtake" // BUILTIN — the native map, branded "Overtake" (label only; enum stays BUILTIN)
 }
 
@@ -936,11 +1041,15 @@ private fun providerLabel(ctx: Context, p: MapProvider): String = when (p) {
  * 3-segment picker (now a tap on the DestinationBar's provider chip). Anything off-cycle (e.g.
  * Espejo/MIRROR) folds back to Propio.
  */
-private fun nextProvider(p: MapProvider): MapProvider = when (p) {
-    MapProvider.BUILTIN -> MapProvider.GOOGLE
-    MapProvider.GOOGLE -> MapProvider.WAZE
-    MapProvider.WAZE -> MapProvider.BUILTIN
-    else -> MapProvider.BUILTIN
+internal fun nextProvider(p: MapProvider): MapProvider {
+    // Cycles the DECLARED list, not a hand-written chain. The chain version silently refused to reach
+    // MapProvider.WEB: its `else` folded the new value straight back to BUILTIN, so the browser was
+    // unreachable from the only selector the rider can actually open — MapScreen's picker is dead code
+    // (nothing navigates to Routes.MAP). Deriving the cycle from SELECTABLE_PROVIDERS means adding a
+    // provider joins the cycle by construction.
+    val cycle = SELECTABLE_PROVIDERS
+    val i = cycle.indexOf(p)
+    return if (i < 0) cycle.first() else cycle[(i + 1) % cycle.size]
 }
 
 /**

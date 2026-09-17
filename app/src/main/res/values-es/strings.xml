@@ -687,6 +687,7 @@
     <string name="ovk_map_sub_web">Navegador · al tablero</string>
     <string name="ovk_map_reach_web">Un navegador web en el tablero, del mismo tamaño que el tablero. Lo manejas desde aquí o desde el propio tablero; arranca en Google Maps.</string>
     <string name="ovk_map_action_web">Abrir el mando del navegador</string>
+    <string name="ovk_browser_address_hint">Busca o escribe una dirección web</string>
     <string name="ovk_app_not_installed">%1$s no está instalado</string>
     <string name="ovk_map_opt_dash">tablero</string>
     <string name="ovk_map_opt_mirror">espejo</string>
