@@ -768,7 +768,7 @@
     <!-- garage screen -->
     <string name="ovk_garage_empty">No bikes paired yet</string>
     <string name="ovk_garage_pair_another">Pair another bike</string>
-    <string name="ovk_garage_tap_hint">Tap a bike to choose its mode</string>
+    <string name="ovk_garage_tap_hint">Tap a bike to use it. Its tags set the mode, the map and the connector.</string>
     <string name="ovk_garage_connected_recent">connected / recent</string>
     <string name="ovk_garage_saved">saved</string>
     <string name="ovk_garage_no_mode">NO MODE</string>

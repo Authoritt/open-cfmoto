@@ -712,7 +712,7 @@
     <!-- garage screen -->
     <string name="ovk_garage_empty">Aún no hay motos emparejadas</string>
     <string name="ovk_garage_pair_another">Emparejar otra moto</string>
-    <string name="ovk_garage_tap_hint">Toca una moto para elegir su modo</string>
+    <string name="ovk_garage_tap_hint">Toca una moto para usarla. Sus etiquetas cambian el modo, el mapa y el conector.</string>
     <string name="ovk_garage_connected_recent">conectada / reciente</string>
     <string name="ovk_garage_saved">guardada</string>
     <string name="ovk_garage_no_mode">SIN MODO</string>
