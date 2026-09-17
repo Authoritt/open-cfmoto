@@ -203,6 +203,63 @@ class GoogleMapsScrapeTest {
      * What this does NOT do, measured three times: force a list. With no bias, with this bias, and
      * with a mobile user-agent, "chipichape" still made Google jump straight to the shopping centre.
      */
+    /**
+     * Five rows captured VERBATIM from the dropdown on the device, for the query the owner used. He
+     * found the distinction himself: typing and submitting are different questions, and Maps answers
+     * them differently -- five Chipichapes here, one after the magnifying glass.
+     */
+    @Test
+    fun `a dropdown row splits into name and street`() {
+        val row = "\nChipichape Living\n Calle 37 Bis Norte, Santa Monica Residential, Cal"
+        val s = GoogleMapsScrape.parseSuggestion(row)!!
+        assertEquals("Chipichape Living", s.name)
+        assertEquals("Calle 37 Bis Norte, Santa Monica Residential, Cal", s.address)
+
+        val mall = GoogleMapsScrape.parseSuggestion(
+            "\nChipichape - Centro Comercial\n Calle 38 Norte, Cali, Valle del Cauca",
+        )!!
+        assertEquals("Chipichape - Centro Comercial", mall.name)
+        assertEquals("Calle 38 Norte, Cali, Valle del Cauca", mall.address)
+    }
+
+    /**
+     * The row opens with the icon from Maps' own font — a private-use glyph that draws as a tofu box
+     * and is NOT an empty line. Letting it through shifted everything one place: the phone showed the
+     * box where the name goes, the name where the street goes, and no street at all.
+     */
+    @Test
+    fun `the icon glyph is not the name`() {
+        val withIcon = "\n\uE8B4\nChipichape Living\n Calle 37 Bis Norte, Santa Monica"
+        val s = GoogleMapsScrape.parseSuggestion(withIcon)!!
+        assertEquals("Chipichape Living", s.name)
+        assertEquals("Calle 37 Bis Norte, Santa Monica", s.address)
+    }
+
+    @Test
+    fun `a row with only a name still counts, an empty one does not`() {
+        val only = GoogleMapsScrape.parseSuggestion("\nSolo el nombre")!!
+        assertEquals("Solo el nombre", only.name)
+        assertNull(only.address)
+        assertNull(GoogleMapsScrape.parseSuggestion(""))
+        assertNull(GoogleMapsScrape.parseSuggestion("\n  \n "))
+        assertNull(GoogleMapsScrape.parseSuggestion(null))
+    }
+
+    /** Picking a suggestion searches name AND street, or "Chipichape" would land on the mall again. */
+    @Test
+    fun `picking a suggestion searches both lines`() {
+        assertEquals(
+            "Chipichape Living Calle 37 Bis Norte, Santa Monica Residential",
+            GoogleMapsScrape.queryFor(
+                GoogleMapsScrape.Suggestion(
+                    "Chipichape Living",
+                    "Calle 37 Bis Norte, Santa Monica Residential",
+                ),
+            ),
+        )
+        assertEquals("Sin calle", GoogleMapsScrape.queryFor(GoogleMapsScrape.Suggestion("Sin calle", null)))
+    }
+
     @Test
     fun `the rider position rides along, with a dot for a decimal separator`() {
         val u = GoogleMapsScrape.searchUrl("taller", 3.3702983, -76.5186766)

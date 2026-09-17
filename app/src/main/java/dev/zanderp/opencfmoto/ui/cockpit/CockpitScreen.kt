@@ -95,6 +95,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -132,6 +133,13 @@ fun CockpitScreen(nav: NavController) {
     val provider by store.mapProvider.collectAsStateWithLifecycle(initialValue = MapProvider.BUILTIN)
     val scope = rememberCoroutineScope()
     var showSearch by remember { mutableStateOf(false) }
+    // Con Overtake + Google el buscador pregunta al desplegable de Maps, que solo existe si Maps ya
+    // esta cargado. Se arranca al elegir el proveedor, no al escribir.
+    LaunchedEffect(provider) {
+        if (provider == MapProvider.BUILTIN_GSEARCH) {
+            dev.zanderp.opencfmoto.browser.GooglePlaceSearch.warmUp(ctx)
+        }
+    }
     // Google Maps / Waze are separate apps: they take the destination through a deep link and do the
     // navigating. Everything else (Propio, and Espejo — which mirrors this phone) is navigated by the
     // cockpit itself on its own map. ONE destination box either way; only the submit differs.
@@ -1109,6 +1117,11 @@ private fun CockpitSearchOverlay(
     // Google" se ven IGUAL si solo se deja de pintar filas, y son cosas distintas -- una es una
     // respuesta y la otra es una averia. La escalera de respaldo tenia que ser explicita.
     var notice by remember { mutableStateOf<String?>(null) }
+    // Lo que Google ofreceria MIENTRAS escribes, que no es lo mismo que lo que responde al buscar.
+    var suggestions by remember { mutableStateOf<List<dev.zanderp.opencfmoto.browser.GoogleMapsScrape.Suggestion>>(emptyList()) }
+    // Resolver una sugerencia es una llamada de red disparada por un TOQUE, no por la composicion:
+    // no puede vivir en un LaunchedEffect.
+    val pickScope = rememberCoroutineScope()
     // Que texto tiene ya una respuesta EXPLICITA en pantalla.
     //
     // Los dos escalones escriben la misma lista, y medido en el telefono terminan en cualquier orden:
@@ -1171,6 +1184,7 @@ private fun CockpitSearchOverlay(
         if (q.length < 2) {
             // Empty/short query is served entirely from local state (rendered below) — no network.
             results = emptyList()
+            suggestions = emptyList()
             searching = false
             return@LaunchedEffect
         }
@@ -1182,6 +1196,21 @@ private fun CockpitSearchOverlay(
             NominatimSearch.cachedBiased(q, bLat, bLon, SearchIntent.TYPEAHEAD) ?: emptyList()
         } else {
             emptyList()
+        }
+        if (useGoogle) {
+            // Teclear pregunta al desplegable de Maps; la lupa hace la busqueda entera. Es la misma
+            // division que Maps tiene y que el dueno describio: escribiendo salen los cinco
+            // Chipichape, con la lupa solo el centro comercial.
+            searching = true
+            suggestions = emptyList()
+            delay(GOOGLE_SUGGEST_DEBOUNCE_MS)
+            val sg = dev.zanderp.opencfmoto.browser.GooglePlaceSearch.suggest(ctx, q)
+            if (query.trim() == q && answeredFor != q) {
+                suggestions = sg
+                results = emptyList()
+            }
+            searching = false
+            return@LaunchedEffect
         }
         if (answeredFor != q) results = rankPicks(q, bLat, bLon, cached, recents, favorites, homePlace)
         searching = true
@@ -1239,6 +1268,7 @@ private fun CockpitSearchOverlay(
                 // pintaria SUS resultados debajo del aviso "Google no encontro nada", que es peor que
                 // la lista vacia -- dice una cosa y ensena otra.
                 answeredFor = q
+                suggestions = emptyList()
                 when (g) {
                     is dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Found -> {
                         results = g.hits.map { h ->
@@ -1342,6 +1372,32 @@ private fun CockpitSearchOverlay(
                     }
                 }
             } else {
+                if (results.isEmpty() && suggestions.isNotEmpty()) {
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                        itemsIndexed(suggestions) { idx, sug ->
+                            GoogleSuggestionRow(sug) {
+                                // Una sugerencia no trae coordenadas: Google no las pone en el
+                                // desplegable. Se resuelve buscando su propio texto, que es
+                                // exactamente lo que hace pulsarla en Maps.
+                                pickScope.launch {
+                                    searching = true
+                                    val r = dev.zanderp.opencfmoto.browser.GooglePlaceSearch.resolveSuggestion(
+                                        ctx,
+                                        idx,
+                                        sug,
+                                    )
+                                    searching = false
+                                    val hit = (r as? dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Found)?.hits?.firstOrNull()
+                                    if (hit != null) {
+                                        onPick(MapPlace(hit.name, hit.lat, hit.lon, "google", hit.subtitle ?: ""))
+                                    } else {
+                                        notice = ctx.getString(R.string.ovk_gsearch_empty)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
                 if (results.isEmpty()) {
                     Text(
                         notice
@@ -1354,6 +1410,7 @@ private fun CockpitSearchOverlay(
                 }
                 LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                     items(results) { pick -> SuggestionRow(pick, rowSubtitle(ctx, pick)) { onPick(pick.place) } }
+                }
                 }
             }
         }
@@ -1373,6 +1430,20 @@ private fun CockpitSearchOverlay(
  * path simply does not use it.
  */
 private const val SEARCH_DEBOUNCE_MS = 420L
+
+/**
+ * La misma pausa, pero para el desplegable de Google, y mas larga a proposito.
+ *
+ * Lo pidio el dueno: "recuerda darle un delay a la busqueda para no saturar a google, ya que la
+ * persona puede estar escribiendo y es mejor esperar a que termine de escribir". Cada tecla que pasara
+ * el filtro hace que GOOGLE salga a buscar sus sugerencias, no nosotros: escribiendo "chipichape" a
+ * 420 ms se podrian disparar varias peticiones suyas que la siguiente tecla deja inservibles.
+ *
+ * Lo que de verdad protege no es el numero: es que `LaunchedEffect(query)` cancela la corrutina en
+ * cada tecla, asi que la espera NUNCA termina mientras se escribe y no se llega a pedir nada. El
+ * numero solo decide cuanto silencio cuenta como "ya termino de escribir".
+ */
+private const val GOOGLE_SUGGEST_DEBOUNCE_MS = 700L
 
 /** How a suggestion reached the list — drives the leading glyph and the ranking boost. */
 private enum class SearchKind { HOME, FAVORITE, RECENT, RESULT }
@@ -1471,6 +1542,37 @@ private fun SearchSectionHeader(text: String) {
 }
 
 /** One suggestion row: a kind glyph, the name in bold, the locality + distance subtitle beneath. */
+/** Una sugerencia del desplegable de Maps: nombre y calle, sin distancia (no hay coordenadas aun). */
+@Composable
+private fun GoogleSuggestionRow(s: dev.zanderp.opencfmoto.browser.GoogleMapsScrape.Suggestion, onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(30.dp), contentAlignment = Alignment.Center) {
+            Text("⌕", color = c.inkDim, fontSize = 15.sp)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                s.name,
+                color = c.ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            s.address?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(2.dp))
+                Text(it, color = c.inkDim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
 @Composable
 private fun SuggestionRow(pick: SearchPick, subtitle: String, onClick: () -> Unit) {
     val c = LocalCockpitColors.current

@@ -128,6 +128,12 @@ object DashBrowser {
                 ) {
                     // Only the main frame: a failed tracking pixel must not blank the dash.
                     if (!request.isForMainFrame) return
+                    // Sin esto el fallo es MUDO: la pagina de error se carga con baseUrl null, cuyo
+                    // location.href es "about:blank", asi que desde fuera parece un navegador en blanco
+                    // sin motivo. Costo una sonda entera creer que el problema era otro.
+                    dev.zanderp.opencfmoto.LogBus.log(
+                        "[BROWSER] fallo ${request.url}: ${error.errorCode} ${error.description}",
+                    )
                     view.loadDataWithBaseURL(
                         null,
                         errorPageHtml(request.url.toString(), error.description.toString()),

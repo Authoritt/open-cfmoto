@@ -36,6 +36,38 @@ import java.net.URLEncoder
  */
 object GoogleMapsScrape {
 
+    /**
+     * One autocomplete suggestion: what Maps offers WHILE you type, before you commit to a search.
+     *
+     * It has no coordinates, on purpose — Google does not put any in the dropdown. Picking one is
+     * resolved by searching its own text, which is what pressing it in Maps does too.
+     */
+    data class Suggestion(val name: String, val address: String?)
+
+    /**
+     * A dropdown row -> its two lines. Measured verbatim from the device:
+     * ```
+     * "\nChipichape Living\n Calle 37 Bis Norte, Santa Monica Residential, Cal"
+     * ```
+     * Leading blank line included, hence the filter: the row starts with the icon's empty text node.
+     */
+    fun parseSuggestion(rowText: String?): Suggestion? {
+        // Filtrar por "tiene letra o numero", no por "no esta vacia". La fila empieza con el glifo
+        // del icono de Maps (fuente propia, area de uso privado): se ve como un cuadradito y NO es una
+        // linea vacia, asi que colarlo corria todo un puesto -- en el telefono salia el cuadradito donde
+        // iba el nombre, el nombre donde iba la calle, y la calle no salia.
+        val lines = rowText?.split('\n')
+            ?.map { it.trim() }
+            ?.filter { line -> line.any { it.isLetterOrDigit() } }
+            ?: return null
+        val name = lines.firstOrNull() ?: return null
+        return Suggestion(name, lines.getOrNull(1))
+    }
+
+    /** What to search when the rider picks a suggestion: name AND street, so it lands on that one. */
+    fun queryFor(s: Suggestion): String =
+        listOfNotNull(s.name, s.address).joinToString(" ").trim()
+
     /** One result: what the rider reads, its street, and where it is. */
     data class Hit(val name: String, val lat: Double, val lon: Double, val subtitle: String?)
 

@@ -130,6 +130,153 @@ object GooglePlaceSearch {
         return if (sawFreshPage) Result.Empty else Result.Failed("la pagina no respondio")
     }
 
+    private const val MAPS_HOME = "https://www.google.com/maps"
+
+    /**
+     * Have Maps already open before the rider types a letter.
+     *
+     * The dropdown only exists on a live Maps page, and MEASURED from cold the search box is still
+     * missing after 6 s — so the first suggestion of every session came back empty. Warming up when
+     * the provider is chosen turns that first suggestion into an instant one. The browser is invisible
+     * and costs nothing while idle; the search would have created it anyway.
+     */
+    fun warmUp(context: Context) {
+        DashBrowserHost.ensureStarted(context, MAPS_HOME)
+    }
+
+    /**
+     * What Maps would offer while the rider types — the dropdown, not the results.
+     *
+     * The owner worked out the difference himself: "si yo escribo en el buscador de maps asi me salen
+     * todos esos, pero si le doy a la lupa de buscar ahi si solo me llega el del centro comercial".
+     * Typing and submitting are two different questions, and Maps answers them differently: five
+     * Chipichapes in the dropdown, one after the magnifying glass. So typing asks this, and the
+     * magnifying glass asks [search] — the same split the app already had.
+     *
+     * No page load: the query is typed into the box of whatever Maps page the browser is on, and Maps
+     * fetches its own suggestions. Cheap enough to run on every typing pause.
+     */
+    suspend fun suggest(context: Context, query: String, timeoutMs: Long = 9_000L): List<GoogleMapsScrape.Suggestion> {
+        val q = query.trim()
+        if (q.length < 2) return emptyList()
+        DashBrowserHost.ensureStarted(context, MAPS_HOME)
+
+        val start = SystemClock.uptimeMillis()
+        var typed = false
+        var loadedOnce = false
+        while (SystemClock.uptimeMillis() - start < timeoutMs) {
+            if (!typed) {
+                val r = unwrap(eval(typeJs(q)))
+                if (r?.optInt("ok", 0) == 1) {
+                    typed = true
+                } else {
+                    // No search box: the browser is on another site, or a load failed and left our
+                    // error page. Send it to Maps ONCE and keep trying until the budget runs out.
+                    if (!loadedOnce) {
+                        loadedOnce = true
+                        DashBrowserHost.load(MAPS_HOME)
+                    }
+                    delay(POLL_MS)
+                    continue
+                }
+            }
+            delay(POLL_MS)
+            val obj = unwrap(eval(SUGGEST_JS)) ?: continue
+            val arr = obj.optJSONArray("s") ?: continue
+            if (arr.length() == 0) continue
+            val out = ArrayList<GoogleMapsScrape.Suggestion>(arr.length())
+            for (i in 0 until arr.length()) {
+                GoogleMapsScrape.parseSuggestion(arr.optString(i))?.let(out::add)
+            }
+            if (out.isNotEmpty()) {
+                LogBus.log("[GSUGGEST] $q -> ${out.size}")
+                return out
+            }
+        }
+        LogBus.log("[GSUGGEST] $q -> nada (escribio=$typed)")
+        return emptyList()
+    }
+
+    /**
+     * Type into Maps' own box. On the results page it has NO id (measured: `input[name="q"]`), so it
+     * is found by a ladder of selectors rather than by the one everybody quotes.
+     */
+    private fun typeJs(q: String): String = """
+        (function(t){
+          var b = document.querySelector('#searchboxinput')
+               || document.querySelector('input[name="q"]')
+               || document.querySelector('input[type="text"]');
+          if (!b) return JSON.stringify({ ok: 0 });
+          b.focus();
+          b.value = t;
+          b.dispatchEvent(new Event('input', { bubbles: true }));
+          return JSON.stringify({ ok: 1 });
+        })(QQ);
+    """.trimIndent().replace("QQ", org.json.JSONObject.quote(q))
+
+    /**
+     * The dropdown. `[role="option"]` is empty here (measured: 0) — Google marks these rows with its
+     * own `jsaction`, so that is what we read, and the parser is pure and tested because this is the
+     * least durable selector in the file.
+     */
+    private val SUGGEST_JS = """
+        (function(){
+          var xs = document.querySelectorAll('[jsaction*="suggestion"]'), o = [];
+          for (var i = 0; i < xs.length && i < 8; i++) o.push((xs[i].innerText || '').slice(0, 160));
+          return JSON.stringify({ s: o });
+        })();
+    """.trimIndent()
+
+    /**
+     * Resolver una sugerencia PULSANDOLA, que es lo que hace Maps.
+     *
+     * El primer intento buscaba su texto ("Chipichape Living Calle 37 Bis Norte, Santa Monica
+     * Residential, Cali, Valle del Cauca") y agotaba los 15 s sin respuesta: una frase larga no es una
+     * consulta, es una descripcion. Pulsar la fila deja que Google haga lo suyo, y entonces la url se
+     * convierte en la ficha del sitio, con sus coordenadas dentro.
+     *
+     * Si el clic no llega a ninguna ficha se cae a [search] con el texto, que al menos dice algo.
+     */
+    suspend fun resolveSuggestion(
+        context: Context,
+        index: Int,
+        suggestion: GoogleMapsScrape.Suggestion,
+        timeoutMs: Long = 12_000L,
+    ): Result {
+        val fallbackQuery = GoogleMapsScrape.queryFor(suggestion)
+        DashBrowserHost.ensureStarted(context, MAPS_HOME)
+        val clicked = unwrap(eval(clickJs(index)))?.optInt("ok", 0) == 1
+        if (clicked) {
+            val start = SystemClock.uptimeMillis()
+            while (SystemClock.uptimeMillis() - start < timeoutMs) {
+                delay(POLL_MS)
+                val obj = unwrap(eval(HARVEST_JS)) ?: continue
+                GoogleMapsScrape.singleHit(obj.optString("u"), obj.optString("a"))?.let {
+                    // El nombre, de la SUGERENCIA. El de la url trae la direccion pegada
+                    // ("Chipichape Living, Calle 37 Bis Norte, Santa Monica Residential, Cali, ...")
+                    // y ese texto acaba siendo el nombre del destino en el tablero.
+                    val named = it.copy(name = suggestion.name, subtitle = it.subtitle ?: suggestion.address)
+                    LogBus.log("[GPICK] $index -> ${named.name}")
+                    return Result.Found(listOf(named))
+                }
+            }
+            LogBus.log("[GPICK] $index -> el clic no llego a una ficha; se busca el texto")
+        } else {
+            LogBus.log("[GPICK] $index -> la fila ya no esta; se busca el texto")
+        }
+        return search(context, fallbackQuery, timeoutMs = timeoutMs)
+    }
+
+    private fun clickJs(index: Int): String = """
+        (function(i){
+          var xs = document.querySelectorAll('[jsaction*="suggestion"]');
+          if (i < 0 || i >= xs.length) return JSON.stringify({ ok: 0 });
+          var t = xs[i].querySelector('a,[role="button"]') || xs[i];
+          t.click();
+          return JSON.stringify({ ok: 1 });
+        })(II);
+    """.trimIndent().replace("II", index.toString())
+
     /** One eval, bounded. A destroyed WebView can drop the callback, and a hung poll is a hung search. */
     private suspend fun eval(js: String): String? = withTimeoutOrNull(EVAL_TIMEOUT_MS) {
         suspendCancellableCoroutine { cont ->
