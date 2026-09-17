@@ -72,9 +72,55 @@ object DashBrowser {
             settings.loadWithOverviewMode = true
             settings.setSupportZoom(true)
             settings.builtInZoomControls = true
+            settings.setGeolocationEnabled(true)
+            // A WebView DENIES geolocation unless something answers the prompt — there is no UI for it
+            // on a virtual display anyway. Without this, Google Maps reports it cannot access your
+            // location, which on a motorcycle dashboard is the one thing it must get right. The app
+            // already holds the Android location permission for the dash map; this hands it on.
+            webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onGeolocationPermissionsShowPrompt(
+                    origin: String,
+                    callback: android.webkit.GeolocationPermissions.Callback,
+                ) {
+                    callback.invoke(origin, true, false)
+                }
+            }
             // Pinch-zoom yes, floating +/- buttons no: they would sit on the dash forever.
             settings.displayZoomControls = false
+            // Google serves mobile user-agents a page that immediately tries to bounce into the Maps
+            // APP. We want the web one: the whole point is pixels we can project. A desktop UA also
+            // gives the full map UI instead of the cut-down mobile page.
+            settings.userAgentString =
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/124.0.0.0 Safari/537.36"
             webViewClient = object : WebViewClient() {
+                /**
+                 * `intent://` is how a site says "open my app instead". A WebView has no handler for
+                 * it and fails with `ERR_UNKNOWN_URL_SCHEME` — which is exactly what the dash showed
+                 * when the home page loaded. Launching the app would defeat the point (we cannot
+                 * project another app), so we take the `browser_fallback_url` the intent carries and
+                 * stay on the web.
+                 */
+                override fun shouldOverrideUrlLoading(
+                    view: WebView,
+                    request: WebResourceRequest,
+                ): Boolean {
+                    val url = request.url.toString()
+                    if (url.startsWith("http://") || url.startsWith("https://")) return false
+                    if (url.startsWith("intent://")) {
+                        val fallback = runCatching {
+                            android.content.Intent
+                                .parseUri(url, android.content.Intent.URI_INTENT_SCHEME)
+                                .getStringExtra("browser_fallback_url")
+                        }.getOrNull()
+                        view.loadUrl(fallback ?: HOME_URL)
+                        return true
+                    }
+                    // market://, tel:, geo:, whatsapp:… — swallow them rather than paint an error
+                    // page on a motorcycle dashboard.
+                    return true
+                }
+
                 override fun onReceivedError(
                     view: WebView,
                     request: WebResourceRequest,
