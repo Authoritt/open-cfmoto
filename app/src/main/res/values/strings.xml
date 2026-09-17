@@ -739,6 +739,10 @@
     <string name="ovk_map_action_google">Open Google Maps</string>
     <string name="ovk_map_action_waze">Open Waze</string>
     <string name="ovk_map_action_builtin">Open map on the dash</string>
+    <string name="ovk_provider_web">Browser</string>
+    <string name="ovk_map_sub_web">Browser · to the dash</string>
+    <string name="ovk_map_reach_web">A web browser on the dash, at the same size as the dash. Drive it from here or from the dash itself; it opens on Google Maps.</string>
+    <string name="ovk_map_action_web">Open the browser controls</string>
     <string name="ovk_app_not_installed">%1$s is not installed</string>
     <string name="ovk_map_opt_dash">dash</string>
     <string name="ovk_map_opt_mirror">mirror</string>

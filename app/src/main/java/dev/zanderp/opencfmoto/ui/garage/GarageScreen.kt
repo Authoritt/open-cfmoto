@@ -309,6 +309,7 @@ private fun RemoveTag(onClick: () -> Unit) {
 private fun mapProviderLabel(ctx: Context, p: MapProvider) = when (p) {
     MapProvider.BUILTIN -> "Overtake"; MapProvider.GOOGLE -> "Google Maps"; MapProvider.WAZE -> "Waze"
     MapProvider.MIRROR -> ctx.getString(R.string.ovk_provider_mirror)
+    MapProvider.WEB -> ctx.getString(R.string.ovk_provider_web)
 }
 
 @Composable

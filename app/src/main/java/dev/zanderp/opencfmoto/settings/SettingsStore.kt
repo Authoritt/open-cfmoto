@@ -16,7 +16,14 @@ import kotlinx.coroutines.flow.map
 enum class AppMode { CFMOTO, ANDROID_AUTO }
 
 /** Which map reaches the dash. BUILTIN is the AA-free star of CFMOTO mode. */
-enum class MapProvider { BUILTIN, GOOGLE, WAZE, MIRROR }
+/**
+ * Which map the rider gets. Persisted BY NAME — append only, never reorder or rename: the stored
+ * string of an already-paired install has to keep meaning what it meant.
+ *
+ * WEB is the browser projected to the dash ([dev.zanderp.opencfmoto.browser.DashBrowser]): one WebView
+ * at the bike canvas size, driven from the dash touchscreen or from the phone.
+ */
+enum class MapProvider { BUILTIN, GOOGLE, WAZE, MIRROR, WEB }
 
 /**
  * Which engine renders the built-in dash map projected to the bike (VirtualDisplay → H.264).

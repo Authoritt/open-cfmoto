@@ -683,6 +683,10 @@
     <string name="ovk_map_action_google">Abrir Google Maps</string>
     <string name="ovk_map_action_waze">Abrir Waze</string>
     <string name="ovk_map_action_builtin">Abrir mapa en el tablero</string>
+    <string name="ovk_provider_web">Navegador</string>
+    <string name="ovk_map_sub_web">Navegador · al tablero</string>
+    <string name="ovk_map_reach_web">Un navegador web en el tablero, del mismo tamaño que el tablero. Lo manejas desde aquí o desde el propio tablero; arranca en Google Maps.</string>
+    <string name="ovk_map_action_web">Abrir el mando del navegador</string>
     <string name="ovk_app_not_installed">%1$s no está instalado</string>
     <string name="ovk_map_opt_dash">tablero</string>
     <string name="ovk_map_opt_mirror">espejo</string>

@@ -224,6 +224,7 @@ private fun providerSubtitleRes(p: MapProvider): Int = when (p) {
     MapProvider.GOOGLE -> R.string.ovk_map_sub_google
     MapProvider.WAZE -> R.string.ovk_map_sub_waze
     MapProvider.MIRROR -> R.string.ovk_map_sub_mirror
+    MapProvider.WEB -> R.string.ovk_map_sub_web
 }
 
 @StringRes
@@ -232,12 +233,16 @@ private fun providerReachRes(p: MapProvider): Int = when (p) {
     MapProvider.GOOGLE -> R.string.ovk_map_reach_google
     MapProvider.WAZE -> R.string.ovk_map_reach_waze
     MapProvider.MIRROR -> R.string.ovk_map_reach_mirror
+    MapProvider.WEB -> R.string.ovk_map_reach_web
 }
 
 @StringRes
 private fun providerActionRes(p: MapProvider): Int = when (p) {
     MapProvider.GOOGLE -> R.string.ovk_map_action_google
     MapProvider.WAZE -> R.string.ovk_map_action_waze
+    // WEB is named explicitly rather than falling into the `else`: "Open map on the dash" would be
+    // the wrong promise for a browser.
+    MapProvider.WEB -> R.string.ovk_map_action_web
     else -> R.string.ovk_map_action_builtin
 }
 
