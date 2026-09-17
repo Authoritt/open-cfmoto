@@ -46,6 +46,7 @@ import dev.zanderp.opencfmoto.SetupHelper
 import dev.zanderp.opencfmoto.connection.AutoConnectManager
 import dev.zanderp.opencfmoto.connection.CfmotoConnect
 import dev.zanderp.opencfmoto.settings.SettingsStore
+import dev.zanderp.opencfmoto.ui.cockpit.BrowserControlScreen
 import dev.zanderp.opencfmoto.ui.cockpit.CockpitScreen
 import dev.zanderp.opencfmoto.ui.controls.ControlsScreen
 import dev.zanderp.opencfmoto.ui.dash.DashViewScreen
@@ -302,6 +303,8 @@ object Routes {
     const val ONBOARDING = "onboarding"
     const val LANGUAGE = "language"
     const val LOG = "log"
+    /** Drives the ONE browser projected to the dash — see MapProvider.WEB. */
+    const val BROWSER = "browser"
 }
 
 @Composable
@@ -327,6 +330,13 @@ fun CockpitApp(startRoute: String? = null, startDestination: String = Routes.DAS
         composable(Routes.MAP_HUB) { MapHubScreen(nav) }
         composable(Routes.OFFLINE_PACKS) { OfflinePacksScreen(nav) }
         composable(Routes.MAPSFORGE_MAPS) { MapsforgeMapsScreen(nav) }
+        composable(Routes.BROWSER) {
+            // The canvas comes from the LIVE pipeline, not from BikeProfileHolder: the profile carries
+            // no canvas size, the bike reports its own at connect time. The fallback only applies
+            // before a pipeline exists, when the preview has nothing to show anyway.
+            val (cw, ch) = dev.zanderp.opencfmoto.browser.DashBrowserHost.canvasSize()
+            BrowserControlScreen(nav, canvasW = cw, canvasH = ch)
+        }
     }
     // Deep-link: after the graph is set, jump onto the requested route (so Back returns to the dash).
     if (startRoute != null) {

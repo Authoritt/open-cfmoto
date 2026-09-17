@@ -188,7 +188,7 @@ fun MapScreen(nav: NavController) {
             }
             ProviderSelector(
                 selected = provider,
-                onSelect = { scope.launch { store.setMapProvider(it) } },
+                onSelect = { p -> scope.launch { store.setMapProviderMirrored(p) }; if (p == MapProvider.WEB) nav.navigate(Routes.BROWSER) },
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(10.dp),
             )
             // Persistent day/night/auto toggle, on the map itself (not just in Settings).
@@ -219,11 +219,13 @@ fun MapScreen(nav: NavController) {
 }
 
 @StringRes
-private fun providerSubtitleRes(p: MapProvider): Int = when (p) {
+internal fun providerSubtitleRes(p: MapProvider): Int = when (p) {
     MapProvider.BUILTIN -> R.string.ovk_map_sub_builtin
     MapProvider.GOOGLE -> R.string.ovk_map_sub_google
     MapProvider.WAZE -> R.string.ovk_map_sub_waze
     MapProvider.MIRROR -> R.string.ovk_map_sub_mirror
+    MapProvider.WEB -> R.string.ovk_map_sub_web
+    MapProvider.BUILTIN_GSEARCH -> R.string.ovk_map_sub_gsearch
 }
 
 @StringRes
@@ -232,12 +234,17 @@ private fun providerReachRes(p: MapProvider): Int = when (p) {
     MapProvider.GOOGLE -> R.string.ovk_map_reach_google
     MapProvider.WAZE -> R.string.ovk_map_reach_waze
     MapProvider.MIRROR -> R.string.ovk_map_reach_mirror
+    MapProvider.WEB -> R.string.ovk_map_reach_web
+    MapProvider.BUILTIN_GSEARCH -> R.string.ovk_map_reach_gsearch
 }
 
 @StringRes
 private fun providerActionRes(p: MapProvider): Int = when (p) {
     MapProvider.GOOGLE -> R.string.ovk_map_action_google
     MapProvider.WAZE -> R.string.ovk_map_action_waze
+    // WEB is named explicitly rather than falling into the `else`: "Open map on the dash" would be
+    // the wrong promise for a browser.
+    MapProvider.WEB -> R.string.ovk_map_action_web
     else -> R.string.ovk_map_action_builtin
 }
 
@@ -251,6 +258,42 @@ private fun openApp(ctx: Context, pkg: String, label: String) {
     }
 }
 
+/**
+ * What this selector offers, as data rather than as hand-written rows.
+ *
+ * It used to be three literal rows, so adding `MapProvider.WEB` compiled, tested green and simply
+ * never appeared on screen — a list written by hand stops seeing what is new, without saying so.
+ * [ProviderSelectorCoverageTest] now fails if a provider is neither offered here nor excluded below,
+ * which turns "someone forgot" into a red test instead of a missing button.
+ */
+internal val SELECTABLE_PROVIDERS = listOf(
+    MapProvider.BUILTIN,
+    MapProvider.GOOGLE,
+    MapProvider.WAZE,
+    MapProvider.WEB,
+    MapProvider.BUILTIN_GSEARCH,
+)
+
+/** Deliberately absent: Mirror is armed from its own screen (it needs screen-capture consent first). */
+internal val PROVIDERS_NOT_IN_SELECTOR = listOf(MapProvider.MIRROR)
+
+@Composable
+private fun providerOptionLabel(p: MapProvider): String = when (p) {
+    MapProvider.BUILTIN -> "Overtake"
+    MapProvider.GOOGLE -> "Google"
+    MapProvider.WAZE -> "Waze"
+    MapProvider.WEB -> stringResource(R.string.ovk_provider_web)
+    MapProvider.MIRROR -> stringResource(R.string.ovk_provider_mirror)
+    MapProvider.BUILTIN_GSEARCH -> stringResource(R.string.ovk_provider_gsearch)
+}
+
+/** Where the provider ends up: drawn on the dash by us, or handed to Android Auto. */
+@Composable
+private fun providerOptionSub(p: MapProvider): String = when (p) {
+    MapProvider.GOOGLE, MapProvider.WAZE -> stringResource(R.string.ovk_map_opt_aa)
+    else -> stringResource(R.string.ovk_map_opt_dash)
+}
+
 @Composable
 private fun ProviderSelector(selected: MapProvider, onSelect: (MapProvider) -> Unit, modifier: Modifier) {
     val c = LocalCockpitColors.current
@@ -258,9 +301,14 @@ private fun ProviderSelector(selected: MapProvider, onSelect: (MapProvider) -> U
         modifier.clip(RoundedCornerShape(11.dp)).background(c.ground.copy(alpha = 0.85f)).border(1.dp, c.line, RoundedCornerShape(11.dp)).padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        ProviderOption("Overtake", stringResource(R.string.ovk_map_opt_dash), selected == MapProvider.BUILTIN, Modifier.weight(1f)) { onSelect(MapProvider.BUILTIN) }
-        ProviderOption("Google", stringResource(R.string.ovk_map_opt_aa), selected == MapProvider.GOOGLE, Modifier.weight(1f)) { onSelect(MapProvider.GOOGLE) }
-        ProviderOption("Waze", stringResource(R.string.ovk_map_opt_aa), selected == MapProvider.WAZE, Modifier.weight(1f)) { onSelect(MapProvider.WAZE) }
+        SELECTABLE_PROVIDERS.forEach { p ->
+            ProviderOption(
+                providerOptionLabel(p),
+                providerOptionSub(p),
+                selected == p,
+                Modifier.weight(1f),
+            ) { onSelect(p) }
+        }
     }
 }
 

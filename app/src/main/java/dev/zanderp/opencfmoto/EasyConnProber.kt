@@ -290,18 +290,32 @@ class EasyConnProber(
      *   should fall back to [joinWifi].
      */
     fun attachOwnedGpxVideo(): Boolean {
-        if (!running) {
-            log("[MAP] attachOwnedGpxVideo: prober not running")
-            return false
-        }
         if (!GpxSession.active) {
             log("[MAP] attachOwnedGpxVideo: no map session")
+            return false
+        }
+        return attachOwnedVideo("gpx")
+    }
+
+    /**
+     * Re-armar lo que el tablero muestra, SIN tocar PXC. Misma maquinaria, sin exigir sesion de mapa.
+     *
+     * Lo encontro el dueno en la moto: "cuando cambio de mapa me toca desconectar y volver a
+     * conectar". Y era literal -- [VideoPipeline] decide QUE pinta una sola vez, al arrancar, asi que
+     * cambiar de proveedor con la moto conectada no hacia absolutamente nada. Cambiar de mapa no es
+     * un evento de navegacion, por eso no podia entrar por [attachOwnedGpxVideo].
+     */
+    fun reattachOwnedVideo(reason: String): Boolean = attachOwnedVideo(reason)
+
+    private fun attachOwnedVideo(reason: String): Boolean {
+        if (!running) {
+            log("[MAP] attachOwnedVideo($reason): prober not running")
             return false
         }
         detachVideoSource()
         val w = negW.coerceAtLeast(16)
         val h = negH.coerceAtLeast(16)
-        log("[MAP] attaching owned GPX video ${w}x${h} (PXC kept)")
+        log("[MAP] attaching owned video ${w}x${h} for $reason (PXC kept)")
         val vp = VideoPipeline(context, w, h, log)
         vp.start()
         if (!vp.isAlive) {

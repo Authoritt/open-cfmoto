@@ -51,6 +51,7 @@ import dev.zanderp.opencfmoto.HudViewActivity
 import dev.zanderp.opencfmoto.QrScanActivity
 import dev.zanderp.opencfmoto.TripsListActivity
 import dev.zanderp.opencfmoto.settings.MapProvider
+import dev.zanderp.opencfmoto.settings.rendersNativeMap
 import dev.zanderp.opencfmoto.settings.SettingsStore
 import dev.zanderp.opencfmoto.ui.Routes
 import dev.zanderp.opencfmoto.ui.components.AutoConnectDialog
@@ -61,6 +62,7 @@ import dev.zanderp.opencfmoto.ui.components.MonoLabel
 import dev.zanderp.opencfmoto.ui.components.PrimaryButton
 import dev.zanderp.opencfmoto.ui.components.StatusKind
 import dev.zanderp.opencfmoto.ui.components.Tile
+import dev.zanderp.opencfmoto.ui.cockpit.providerLabel
 import dev.zanderp.opencfmoto.ui.components.RadioNeed
 import dev.zanderp.opencfmoto.ui.components.RadioNeededDialog
 import dev.zanderp.opencfmoto.ui.connection.enableRadio
@@ -98,7 +100,7 @@ fun DashboardScreen(nav: NavController) {
     // provider is Google/Waze (AA) or Mirror. Gated on AppSettings.autoConnect inside the call, and
     // shares CfmotoConnect's single-flight with the background CompanionDeviceService (no double-fire).
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        if (provider == MapProvider.BUILTIN) {
+        if (provider.rendersNativeMap) {
             ctx.findActivity()?.let { CfmotoConnect.maybeAutoConnectCfmotoMap(it) }
         }
     }
@@ -194,7 +196,7 @@ fun DashboardScreen(nav: NavController) {
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             Tile("⌖", stringResource(R.string.ovk_tile_scan), stringResource(R.string.ovk_tile_scan_desc), { nav.navigate(Routes.SCAN) }, Modifier.weight(1f))
-            Tile("◧", stringResource(R.string.ovk_mode_map), "Overtake", { nav.navigate(Routes.COCKPIT) }, Modifier.weight(1f))
+            Tile("◧", stringResource(R.string.ovk_mode_map), providerLabel(ctx, provider), { nav.navigate(Routes.COCKPIT) }, Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             Tile("⊞", stringResource(R.string.ovk_provider_mirror), stringResource(R.string.ovk_tile_mirror_desc), { nav.navigate(Routes.MIRROR) }, Modifier.weight(1f))

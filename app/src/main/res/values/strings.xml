@@ -739,6 +739,16 @@
     <string name="ovk_map_action_google">Open Google Maps</string>
     <string name="ovk_map_action_waze">Open Waze</string>
     <string name="ovk_map_action_builtin">Open map on the dash</string>
+    <string name="ovk_provider_web">Browser</string>
+    <string name="ovk_map_sub_web">Browser · to the dash</string>
+    <string name="ovk_map_reach_web">A web browser on the dash, at the same size as the dash. Drive it from here or from the dash itself; it opens on Google Maps.</string>
+    <string name="ovk_map_action_web">Open the browser controls</string>
+    <string name="ovk_browser_address_hint">Search or type a web address</string>
+    <string name="ovk_provider_gsearch">Overtake + Google</string>
+    <string name="ovk_map_sub_gsearch">Overtake map · finds with Google</string>
+    <string name="ovk_map_reach_gsearch">The same Overtake map on the dash, drawn by us and navigated by us. What changes is the search: you type, Google answers with its list, and you pick.</string>
+    <string name="ovk_gsearch_empty">Google found nothing by that name</string>
+    <string name="ovk_gsearch_failed">Could not ask Google. Check the connection.</string>
     <string name="ovk_app_not_installed">%1$s is not installed</string>
     <string name="ovk_map_opt_dash">dash</string>
     <string name="ovk_map_opt_mirror">mirror</string>
@@ -764,7 +774,7 @@
     <!-- garage screen -->
     <string name="ovk_garage_empty">No bikes paired yet</string>
     <string name="ovk_garage_pair_another">Pair another bike</string>
-    <string name="ovk_garage_tap_hint">Tap a bike to choose its mode</string>
+    <string name="ovk_garage_tap_hint">Tap a bike to use it. Its tags set the mode, the map and the connector.</string>
     <string name="ovk_garage_connected_recent">connected / recent</string>
     <string name="ovk_garage_saved">saved</string>
     <string name="ovk_garage_no_mode">NO MODE</string>

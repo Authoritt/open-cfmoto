@@ -21,6 +21,31 @@ import java.net.Inet4Address
  */
 object BikeLink {
     @Volatile var prober: EasyConnProber? = null
+
+    private val rearmHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingRearm: Runnable? = null
+
+    /**
+     * Pedir que el tablero vuelva a decidir QUE muestra, agrupando peticiones seguidas.
+     *
+     * La ficha del cockpit cicla de proveedor a cada toque, asi que tres toques rapidos pedirian tres
+     * re-armados -- y cada uno tira y reconstruye el VideoPipeline. Zarandear asi la fuente de video
+     * de una moto conectada es pedir un problema, y ademas los dos primeros no los llega a ver nadie.
+     * Se queda el ultimo.
+     */
+    fun requestDashRearm(reason: String, delayMs: Long = 700L) {
+        rearmHandler.post {
+            pendingRearm?.let { rearmHandler.removeCallbacks(it) }
+            val r = Runnable {
+                pendingRearm = null
+                val p = prober ?: return@Runnable
+                runCatching { p.reattachOwnedVideo(reason) }
+                    .onFailure { LogBus.log("[MAP] re-armar el tablero fallo: $it") }
+            }
+            pendingRearm = r
+            rearmHandler.postDelayed(r, delayMs)
+        }
+    }
     @Volatile private var appContext: Context? = null
 
     // ---- Android Auto → bike start coordination (parallel-startup gate) ----

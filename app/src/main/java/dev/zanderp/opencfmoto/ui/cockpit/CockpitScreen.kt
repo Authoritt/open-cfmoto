@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -74,6 +76,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.NavLauncher
 import dev.zanderp.opencfmoto.settings.MapProvider
+import dev.zanderp.opencfmoto.ui.map.SELECTABLE_PROVIDERS
 import dev.zanderp.opencfmoto.settings.SettingsStore
 import kotlinx.coroutines.launch
 import android.Manifest
@@ -92,6 +95,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -129,6 +133,13 @@ fun CockpitScreen(nav: NavController) {
     val provider by store.mapProvider.collectAsStateWithLifecycle(initialValue = MapProvider.BUILTIN)
     val scope = rememberCoroutineScope()
     var showSearch by remember { mutableStateOf(false) }
+    // Con Overtake + Google el buscador pregunta al desplegable de Maps, que solo existe si Maps ya
+    // esta cargado. Se arranca al elegir el proveedor, no al escribir.
+    LaunchedEffect(provider) {
+        if (provider == MapProvider.BUILTIN_GSEARCH) {
+            dev.zanderp.opencfmoto.browser.GooglePlaceSearch.warmUp(ctx)
+        }
+    }
     // Google Maps / Waze are separate apps: they take the destination through a deep link and do the
     // navigating. Everything else (Propio, and Espejo — which mirrors this phone) is navigated by the
     // cockpit itself on its own map. ONE destination box either way; only the submit differs.
@@ -488,7 +499,16 @@ fun CockpitScreen(nav: NavController) {
     Box(Modifier.fillMaxSize().background(c.ground)) {
         // Base layer — the SELECTED renderer fills the whole surface. When the strict Mapsforge gate is
         // up (Mapsforge chosen but no offline `.map`), a "download a map" card takes the base instead.
-        if (needsMapsforgeMap) {
+        if (provider == MapProvider.WEB) {
+            // With the browser chosen there is no map and no Mapa|Panel: the cockpit IS the browser,
+            // full-bleed. It is a live view of the one browser on the dash display, so what you touch
+            // here is what the bike shows — and it needs no bike to be useful.
+            val (bw, bh) = dev.zanderp.opencfmoto.browser.DashBrowserHost.canvasSize()
+            AndroidView(
+                factory = { c2 -> browserSurface(c2, bw, bh) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (needsMapsforgeMap) {
             MapsforgeNeedsMapCard(
                 modifier = Modifier.fillMaxSize(),
                 onDownload = { nav.navigate(Routes.MAPSFORGE_MAPS) },
@@ -507,6 +527,18 @@ fun CockpitScreen(nav: NavController) {
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlyphBox("‹") { nav.popBackStack() }
+                if (provider == MapProvider.WEB) {
+                    // The browser's own address bar, in the slot the destination box uses otherwise.
+                    // Not extra chrome: an address bar is what makes a browser a browser — without it
+                    // the rider could only follow links from wherever the home page happens to be.
+                    BrowserAddressBar(
+                        modifier = Modifier.weight(1f),
+                        onGo = { typed -> dev.zanderp.opencfmoto.browser.DashBrowserHost.navigate(typed) },
+                    )
+                    ProviderChip(providerLabel(ctx, provider)) {
+                        scope.launch { store.setMapProviderMirrored(nextProvider(provider)) }
+                    }
+                } else {
                 DestinationBar(
                     providerLabel = providerLabel(ctx, provider),
                     modifier = Modifier.weight(1f),
@@ -514,14 +546,21 @@ fun CockpitScreen(nav: NavController) {
                     // Google/Waze, which the rider read as "a second popup instead of the box I was
                     // already using"). What changes with the provider is only what submit does.
                     onSearch = { showSearch = true },
-                    onCycleProvider = { scope.launch { store.setMapProvider(nextProvider(provider)) } },
+                    onCycleProvider = {
+                        // Choosing the browser IS opening it: no note, no intermediate button.
+                        // Just cycle: landing on WEB turns this very screen into the browser, so there
+                        // is nowhere to navigate to and no way to get stranded outside it.
+                        scope.launch { store.setMapProviderMirrored(nextProvider(provider)) }
+                    },
                 )
                 // Persistent day/night/auto toggle (compact) — flip the map look without leaving the map.
                 if (!needsMapsforgeMap) {
                     MapThemeToggle(compact = true, onThemeChanged = { night -> renderer.applyTheme(night) })
                 }
+                }
             }
-            ModeToggle(cockpitMode) { cockpitMode = it }
+            // No Mapa|Panel with the browser: there is no map to toggle against.
+            if (provider != MapProvider.WEB) ModeToggle(cockpitMode) { cockpitMode = it }
             // AA mode only: "Dash view" opens the LIVE Android Auto video (Google Maps / Waze exactly as
             // Android Auto is painting them on the bike dash) — the cockpit's own Compose screen, which
             // shows that video or nothing at all. It used to open the classic HudViewActivity, whose
@@ -534,7 +573,7 @@ fun CockpitScreen(nav: NavController) {
                 // the rider learns what choosing Google/Waze actually means: the dash is not ours to
                 // paint in that mode, and the order matters — bike first, destination after.
                 ProviderNote(stringResource(R.string.ovk_provider_aa_hint))
-                DashViewButton { nav.navigate(Routes.DASH_VIEW) }
+                ProviderActionButton(stringResource(R.string.ovk_dash_view)) { nav.navigate(Routes.DASH_VIEW) }
             }
             if (navState.active) NavCard(navState, Modifier.fillMaxWidth())
         }
@@ -544,7 +583,10 @@ fun CockpitScreen(nav: NavController) {
         // map stays clean (nav/call still surface when they matter). Bounded height: these panels contain
         // weight(1f) children, so without a height cap they'd fill the whole Box (opaque) and bury the
         // map + top controls. Cap them as bottom widgets.
+        // …and none of them with the browser: a browser has no now-playing strip and no route card.
+        // They are cockpit widgets, and in WEB mode this screen is not the cockpit, it is the page.
         when {
+            provider == MapProvider.WEB -> Unit
             callState.active -> CallCard(callState, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp))
             navigating -> NavProgressCard(
                 progress = navProgress,
@@ -558,7 +600,7 @@ fun CockpitScreen(nav: NavController) {
         // "▶ Iniciar recorrido" — shown only after a place is picked and before navigation starts. A
         // prominent ignition pill, centered + wrap-content so it clears the bottom-END locate FAB, lifted
         // above whatever bottom widget (music/call) is currently showing.
-        if (navDest != null && !navigating) {
+        if (provider != MapProvider.WEB && navDest != null && !navigating) {
             StartRideButton(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -571,6 +613,9 @@ fun CockpitScreen(nav: NavController) {
         // music panel, the ~190dp call card, or the shorter nav progress card) so it's never buried; in
         // clean Mapa mode it drops to the corner. While navigating it doubles as the re-center control
         // (osmdroid drops follow on a manual pan). Drawn before the search overlay so search covers it.
+        // …and none of these with the browser: "locate me", "re-centre" and "route overview" are map
+        // controls. On a web page they do nothing, and a button that does nothing is worse than absent.
+        if (provider != MapProvider.WEB) {
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -614,6 +659,7 @@ fun CockpitScreen(nav: NavController) {
             }
             LocateButton(following = following, modifier = Modifier, onClick = { locateMe() })
         }
+        }
 
         // The ONE destination box, for every provider — native autocomplete drawn over the map, no
         // GpxActivity handoff and no second dialog. A pick on Propio/Espejo becomes a destination on
@@ -625,6 +671,7 @@ fun CockpitScreen(nav: NavController) {
             CockpitSearchOverlay(
                 providerLabel = providerLabel(ctx, provider),
                 handsToNavApp = handsToNavApp,
+                useGoogle = provider == MapProvider.BUILTIN_GSEARCH,
                 onDismiss = { showSearch = false },
                 onPick = { place ->
                     if (handsToNavApp) {
@@ -709,8 +756,73 @@ private fun ProviderNote(text: String) {
     )
 }
 
+/**
+ * The browser's address bar — the one piece of chrome a browser cannot do without.
+ *
+ * Types a URL or a search, exactly like Chrome's omnibox: `facebook.com` navigates, `taller de motos`
+ * searches. Without it the rider can only follow links from wherever the home page left them, which is
+ * not a browser, it is a kiosk.
+ */
 @Composable
-private fun DashViewButton(onClick: () -> Unit) {
+private fun BrowserAddressBar(modifier: Modifier, onGo: (String) -> Unit) {
+    val c = LocalCockpitColors.current
+    var typed by remember { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
+    BasicTextField(
+        value = typed,
+        onValueChange = { typed = it },
+        singleLine = true,
+        textStyle = androidx.compose.ui.text.TextStyle(color = c.ink, fontSize = 14.sp),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(c.ignition),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+        keyboardActions = KeyboardActions(onGo = {
+            if (typed.isNotBlank()) onGo(typed)
+            keyboard?.hide()
+        }),
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(c.ground.copy(alpha = 0.92f))
+            .border(1.dp, c.line, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        decorationBox = { inner ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("⌕", color = c.ignition, fontSize = 14.sp)
+                Spacer(Modifier.width(8.dp))
+                Box(Modifier.weight(1f)) {
+                    if (typed.isEmpty()) {
+                        Text(
+                            stringResource(R.string.ovk_browser_address_hint),
+                            color = c.inkFaint,
+                            fontSize = 14.sp,
+                        )
+                    }
+                    inner()
+                }
+            }
+        },
+    )
+}
+
+/** The provider chip on its own, for the browser bar (the destination box carries its own otherwise). */
+@Composable
+private fun ProviderChip(label: String, onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(c.ground.copy(alpha = 0.92f))
+            .border(1.dp, c.line, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+    ) {
+        Text(label, color = c.ignition, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** The call-to-action under a provider note. Was `DashViewButton` with the label baked in; the browser
+ *  needs the same pill with different words, and one button with a label beats two identical ones. */
+@Composable
+private fun ProviderActionButton(label: String, onClick: () -> Unit) {
     val c = LocalCockpitColors.current
     Row(
         Modifier.fillMaxWidth()
@@ -723,7 +835,7 @@ private fun DashViewButton(onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "▸ " + stringResource(R.string.ovk_dash_view),
+            "▸ $label",
             color = c.ignition,
             fontWeight = FontWeight.SemiBold,
             fontSize = 13.sp,
@@ -924,11 +1036,21 @@ private fun Context.findActivity(): Activity? {
     return null
 }
 
-private fun providerLabel(ctx: Context, p: MapProvider): String = when (p) {
+/**
+ * The ONE place a provider becomes a word the rider reads. Shared (not private) because the Tablero
+ * tile used to carry the literal "Overtake" hardcoded: it said Overtake while the cockpit was showing
+ * Google, Espejo or the browser. A second hand-written label is the same bug the selector already had.
+ *
+ * Exhaustive on purpose -- no `else`. The `else` that used to be here would have labelled the browser
+ * "Overtake", and it would do the same to whatever provider comes next, without a word of complaint.
+ */
+internal fun providerLabel(ctx: Context, p: MapProvider): String = when (p) {
     MapProvider.GOOGLE -> "Google Maps" // brand name — not translated
     MapProvider.WAZE -> "Waze" // brand name — not translated
     MapProvider.MIRROR -> ctx.getString(R.string.ovk_provider_mirror)
-    else -> "Overtake" // BUILTIN — the native map, branded "Overtake" (label only; enum stays BUILTIN)
+    MapProvider.WEB -> ctx.getString(R.string.ovk_provider_web)
+    MapProvider.BUILTIN -> "Overtake" // the native map, branded "Overtake" (label only; enum stays BUILTIN)
+    MapProvider.BUILTIN_GSEARCH -> ctx.getString(R.string.ovk_provider_gsearch)
 }
 
 /**
@@ -936,11 +1058,15 @@ private fun providerLabel(ctx: Context, p: MapProvider): String = when (p) {
  * 3-segment picker (now a tap on the DestinationBar's provider chip). Anything off-cycle (e.g.
  * Espejo/MIRROR) folds back to Propio.
  */
-private fun nextProvider(p: MapProvider): MapProvider = when (p) {
-    MapProvider.BUILTIN -> MapProvider.GOOGLE
-    MapProvider.GOOGLE -> MapProvider.WAZE
-    MapProvider.WAZE -> MapProvider.BUILTIN
-    else -> MapProvider.BUILTIN
+internal fun nextProvider(p: MapProvider): MapProvider {
+    // Cycles the DECLARED list, not a hand-written chain. The chain version silently refused to reach
+    // MapProvider.WEB: its `else` folded the new value straight back to BUILTIN, so the browser was
+    // unreachable from the only selector the rider can actually open — MapScreen's picker is dead code
+    // (nothing navigates to Routes.MAP). Deriving the cycle from SELECTABLE_PROVIDERS means adding a
+    // provider joins the cycle by construction.
+    val cycle = SELECTABLE_PROVIDERS
+    val i = cycle.indexOf(p)
+    return if (i < 0) cycle.first() else cycle[(i + 1) % cycle.size]
 }
 
 /**
@@ -977,6 +1103,7 @@ private fun nextProvider(p: MapProvider): MapProvider = when (p) {
 private fun CockpitSearchOverlay(
     providerLabel: String,
     handsToNavApp: Boolean,
+    useGoogle: Boolean,
     onDismiss: () -> Unit,
     onPick: (MapPlace) -> Unit,
     onSubmitText: (String) -> Unit,
@@ -986,6 +1113,22 @@ private fun CockpitSearchOverlay(
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<SearchPick>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
+    // Por que un aviso y no una lista vacia: "Google no encontro nada" y "no se pudo preguntar a
+    // Google" se ven IGUAL si solo se deja de pintar filas, y son cosas distintas -- una es una
+    // respuesta y la otra es una averia. La escalera de respaldo tenia que ser explicita.
+    var notice by remember { mutableStateOf<String?>(null) }
+    // Lo que Google ofreceria MIENTRAS escribes, que no es lo mismo que lo que responde al buscar.
+    var suggestions by remember { mutableStateOf<List<dev.zanderp.opencfmoto.browser.GoogleMapsScrape.Suggestion>>(emptyList()) }
+    // Resolver una sugerencia es una llamada de red disparada por un TOQUE, no por la composicion:
+    // no puede vivir en un LaunchedEffect.
+    val pickScope = rememberCoroutineScope()
+    // Que texto tiene ya una respuesta EXPLICITA en pantalla.
+    //
+    // Los dos escalones escriben la misma lista, y medido en el telefono terminan en cualquier orden:
+    // con "taller" el escalon de teclear llego 1,4 s DESPUES de Google y enterro sus cinco sitios; con
+    // "Chipichape" gano Google. Una carrera que decide la latencia de la red no es un diseno. La
+    // respuesta que el rider PIDIO gana siempre a la que solo aparecio mientras escribia.
+    var answeredFor by remember { mutableStateOf<String?>(null) }
     // The explicit search: a counter, not a boolean, because pressing search TWICE on the same text
     // must run it twice (the rider is retrying) and a LaunchedEffect only restarts when its key
     // changes. The text is captured ALONGSIDE the tick so the effect can never be re-triggered by a
@@ -1036,9 +1179,12 @@ private fun CockpitSearchOverlay(
 
     LaunchedEffect(query) {
         val q = query.trim()
+        // El texto cambio: la respuesta explicita anterior era de OTRA busqueda.
+        answeredFor = null
         if (q.length < 2) {
             // Empty/short query is served entirely from local state (rendered below) — no network.
             results = emptyList()
+            suggestions = emptyList()
             searching = false
             return@LaunchedEffect
         }
@@ -1051,7 +1197,22 @@ private fun CockpitSearchOverlay(
         } else {
             emptyList()
         }
-        results = rankPicks(q, bLat, bLon, cached, recents, favorites, homePlace)
+        if (useGoogle) {
+            // Teclear pregunta al desplegable de Maps; la lupa hace la busqueda entera. Es la misma
+            // division que Maps tiene y que el dueno describio: escribiendo salen los cinco
+            // Chipichape, con la lupa solo el centro comercial.
+            searching = true
+            suggestions = emptyList()
+            delay(GOOGLE_SUGGEST_DEBOUNCE_MS)
+            val sg = dev.zanderp.opencfmoto.browser.GooglePlaceSearch.suggest(ctx, q)
+            if (query.trim() == q && answeredFor != q) {
+                suggestions = sg
+                results = emptyList()
+            }
+            searching = false
+            return@LaunchedEffect
+        }
+        if (answeredFor != q) results = rankPicks(q, bLat, bLon, cached, recents, favorites, homePlace)
         searching = true
         // THE debounce for place search — the only one on this path, deliberately. Nothing leaves
         // the device until the rider pauses: LaunchedEffect(query) cancels this coroutine on the next
@@ -1076,13 +1237,18 @@ private fun CockpitSearchOverlay(
             LogBus.log("[cockpit-search] ${e.message ?: e}")
             emptyList()
         }
-        results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
+        // La busqueda explicita pudo contestar mientras esta esperaba a la red. Si lo hizo, esta se
+        // calla: escribir aqui seria sustituir lo que el rider pidio por lo que salio solo.
+        if (answeredFor != q) results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
         searching = false
     }
 
     // The EXPLICIT search: bumped by the keyboard's search key or by the ⌕ button, never by typing.
     // This is the only trigger allowed to spend a Nominatim request (SearchIntent.SUBMIT) — where the
     // precise local answers (the barrio, the street number) come from.
+    // Un aviso pertenece al texto que lo provoco: si el rider sigue escribiendo, deja de ser cierto.
+    LaunchedEffect(query) { notice = null }
+
     LaunchedEffect(deepSearchTick) {
         if (deepSearchTick == 0) return@LaunchedEffect
         val q = deepSearchQuery
@@ -1091,6 +1257,39 @@ private fun CockpitSearchOverlay(
         val bLon = biasLon
         val near = if (bLat != null && bLon != null) dev.overtake.maps.model.GeoPoint(bLat, bLon) else null
         searching = true
+        notice = null
+        if (useGoogle) {
+            // El ORDEN de Google es la razon de ser de este proveedor, asi que NO se re-ordena:
+            // rankPicks puntuaria estos resultados con nuestra mezcla y desharia en silencio justo lo
+            // que el dueno pidio ("ese busca mejor").
+            val g = dev.zanderp.opencfmoto.browser.GooglePlaceSearch.search(ctx, q, bLat, bLon)
+            if (query.trim() == q) {
+                // Reclamado incluso cuando Google no encontro nada: si no, el escalon de teclear
+                // pintaria SUS resultados debajo del aviso "Google no encontro nada", que es peor que
+                // la lista vacia -- dice una cosa y ensena otra.
+                answeredFor = q
+                suggestions = emptyList()
+                when (g) {
+                    is dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Found -> {
+                        results = g.hits.map { h ->
+                            val place = MapPlace(h.name, h.lat, h.lon, "google", h.subtitle ?: "")
+                            SearchPick(place, SearchKind.RESULT, distanceTo(bLat, bLon, place))
+                        }
+
+                    }
+                    dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Empty -> {
+                        results = emptyList()
+                        notice = ctx.getString(R.string.ovk_gsearch_empty)
+                    }
+                    is dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Failed -> {
+                        results = emptyList()
+                        notice = ctx.getString(R.string.ovk_gsearch_failed)
+                    }
+                }
+            }
+            searching = false
+            return@LaunchedEffect
+        }
         val net = try {
             search.query(q, near, SearchIntent.SUBMIT)
         } catch (ce: kotlinx.coroutines.CancellationException) {
@@ -1102,6 +1301,7 @@ private fun CockpitSearchOverlay(
         // The rider kept typing while the precise provider was answering: that answer belongs to text
         // that is no longer on screen, so drop it instead of painting a stale list over the live one.
         if (query.trim() == q) {
+            answeredFor = q
             results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
         }
         searching = false
@@ -1172,9 +1372,37 @@ private fun CockpitSearchOverlay(
                     }
                 }
             } else {
+                if (results.isEmpty() && suggestions.isNotEmpty()) {
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                        itemsIndexed(suggestions) { idx, sug ->
+                            GoogleSuggestionRow(sug) {
+                                // Una sugerencia no trae coordenadas: Google no las pone en el
+                                // desplegable. Se resuelve buscando su propio texto, que es
+                                // exactamente lo que hace pulsarla en Maps.
+                                pickScope.launch {
+                                    searching = true
+                                    val r = dev.zanderp.opencfmoto.browser.GooglePlaceSearch.resolveSuggestion(
+                                        ctx,
+                                        idx,
+                                        sug,
+                                    )
+                                    searching = false
+                                    val hit = (r as? dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Found)?.hits?.firstOrNull()
+                                    if (hit != null) {
+                                        onPick(MapPlace(hit.name, hit.lat, hit.lon, "google", hit.subtitle ?: ""))
+                                    } else {
+                                        notice = ctx.getString(R.string.ovk_gsearch_empty)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
                 if (results.isEmpty()) {
                     Text(
-                        if (searching) stringResource(R.string.ovk_searching) else stringResource(R.string.ovk_no_results),
+                        notice
+                            ?: if (searching) stringResource(R.string.ovk_searching)
+                            else stringResource(R.string.ovk_no_results),
                         color = c.inkDim,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
@@ -1182,6 +1410,7 @@ private fun CockpitSearchOverlay(
                 }
                 LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                     items(results) { pick -> SuggestionRow(pick, rowSubtitle(ctx, pick)) { onPick(pick.place) } }
+                }
                 }
             }
         }
@@ -1201,6 +1430,20 @@ private fun CockpitSearchOverlay(
  * path simply does not use it.
  */
 private const val SEARCH_DEBOUNCE_MS = 420L
+
+/**
+ * La misma pausa, pero para el desplegable de Google, y mas larga a proposito.
+ *
+ * Lo pidio el dueno: "recuerda darle un delay a la busqueda para no saturar a google, ya que la
+ * persona puede estar escribiendo y es mejor esperar a que termine de escribir". Cada tecla que pasara
+ * el filtro hace que GOOGLE salga a buscar sus sugerencias, no nosotros: escribiendo "chipichape" a
+ * 420 ms se podrian disparar varias peticiones suyas que la siguiente tecla deja inservibles.
+ *
+ * Lo que de verdad protege no es el numero: es que `LaunchedEffect(query)` cancela la corrutina en
+ * cada tecla, asi que la espera NUNCA termina mientras se escribe y no se llega a pedir nada. El
+ * numero solo decide cuanto silencio cuenta como "ya termino de escribir".
+ */
+private const val GOOGLE_SUGGEST_DEBOUNCE_MS = 700L
 
 /** How a suggestion reached the list — drives the leading glyph and the ranking boost. */
 private enum class SearchKind { HOME, FAVORITE, RECENT, RESULT }
@@ -1299,6 +1542,37 @@ private fun SearchSectionHeader(text: String) {
 }
 
 /** One suggestion row: a kind glyph, the name in bold, the locality + distance subtitle beneath. */
+/** Una sugerencia del desplegable de Maps: nombre y calle, sin distancia (no hay coordenadas aun). */
+@Composable
+private fun GoogleSuggestionRow(s: dev.zanderp.opencfmoto.browser.GoogleMapsScrape.Suggestion, onClick: () -> Unit) {
+    val c = LocalCockpitColors.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(30.dp), contentAlignment = Alignment.Center) {
+            Text("⌕", color = c.inkDim, fontSize = 15.sp)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                s.name,
+                color = c.ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            s.address?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(2.dp))
+                Text(it, color = c.inkDim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
 @Composable
 private fun SuggestionRow(pick: SearchPick, subtitle: String, onClick: () -> Unit) {
     val c = LocalCockpitColors.current

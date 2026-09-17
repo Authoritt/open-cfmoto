@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Garage — each paired bike with its mode, its default map, and status. Tapping a bike sets its
-// projection mode (CFMOTO / Android Auto); its map tag sets the per-bike default map provider
+// Garage — each paired bike with its mode, its default map, and status. Tapping a bike SELECTS it (the
+// one Connect will use); its tags set the projection mode (CFMOTO / Android Auto) and the per-bike
+// default map provider
 // (config-ownership design doc §2: the Garage is the one owner — the Map screen's live selector only
 // seeds from it, never the other way around). Pairing a new bike triggers the mode choice.
 package dev.zanderp.opencfmoto.ui.garage
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
+import dev.zanderp.opencfmoto.ui.map.providerSubtitleRes
 import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.NearbyDevices
@@ -92,6 +94,7 @@ fun GarageScreen(nav: NavController) {
             bikes.forEach { bike ->
                 BikeRow(
                     bike, current = bike.raw == selected, refreshKey = refresh,
+                    onSelectClick = { BikeMemory.select(ctx, bike.raw); refresh++ },
                     onModeClick = { modeFor = bike },
                     onProviderClick = { providerFor = bike },
                     onConnectorClick = { connectorFor = bike },
@@ -202,6 +205,7 @@ private fun BikeRow(
     bike: SavedBike,
     current: Boolean,
     refreshKey: Int,
+    onSelectClick: () -> Unit,
     onModeClick: () -> Unit,
     onProviderClick: () -> Unit,
     onConnectorClick: () -> Unit,
@@ -223,9 +227,11 @@ private fun BikeRow(
     }
     val borderColor = if (current) c.ignition.copy(alpha = 0.45f) else c.line
     Row(
-        // The row itself still opens the mode picker (unchanged tap target/hint); the map tag below is
-        // its own smaller, nested tap target for the (separate-owner) map-provider default.
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(13.dp)).background(c.surface1).border(1.dp, borderColor, RoundedCornerShape(13.dp)).clickable(onClick = onModeClick).padding(12.dp),
+        // Tapping a bike SELECTS it — the one Connect will use. It used to open the mode picker, which
+        // meant a garage with two bikes had no way to choose between them: `BikeMemory.select` existed
+        // and nothing called it, so the active bike only ever changed by connecting to one. Mode moved
+        // to its own tag, beside the map/connector/remove tags that already worked that way.
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(13.dp)).background(c.surface1).border(1.dp, borderColor, RoundedCornerShape(13.dp)).clickable(onClick = onSelectClick).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -242,9 +248,9 @@ private fun BikeRow(
         }
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             when (mode) {
-                "ANDROID_AUTO" -> ModeTag("AUTO", aa = true)
-                "CFMOTO" -> ModeTag("CFMOTO", aa = false)
-                else -> ModeTag(stringResource(R.string.ovk_garage_no_mode), aa = true)
+                "ANDROID_AUTO" -> ModeTag("AUTO", aa = true, onClick = onModeClick)
+                "CFMOTO" -> ModeTag("CFMOTO", aa = false, onClick = onModeClick)
+                else -> ModeTag(stringResource(R.string.ovk_garage_no_mode), aa = true, onClick = onModeClick)
             }
             ProviderTag(
                 text = provider?.let { mapProviderLabel(ctx, it) } ?: stringResource(R.string.ovk_garage_no_map),
@@ -261,13 +267,13 @@ private fun BikeRow(
 }
 
 @Composable
-private fun ModeTag(text: String, aa: Boolean) {
+private fun ModeTag(text: String, aa: Boolean, onClick: () -> Unit) {
     val c = LocalCockpitColors.current
     val fg = if (aa) c.inkFaint else c.ignition
     val bg = if (aa) c.ground else c.ignition.copy(alpha = 0.12f)
     val bd = if (aa) c.line else c.ignition.copy(alpha = 0.35f)
     Box(
-        Modifier.clip(RoundedCornerShape(6.dp)).background(bg).border(1.dp, bd, RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 3.dp),
+        Modifier.clip(RoundedCornerShape(6.dp)).background(bg).border(1.dp, bd, RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(horizontal = 7.dp, vertical = 3.dp),
     ) { Text(text, color = fg, fontFamily = FontFamily.Monospace, fontSize = 9.sp) }
 }
 
@@ -309,6 +315,8 @@ private fun RemoveTag(onClick: () -> Unit) {
 private fun mapProviderLabel(ctx: Context, p: MapProvider) = when (p) {
     MapProvider.BUILTIN -> "Overtake"; MapProvider.GOOGLE -> "Google Maps"; MapProvider.WAZE -> "Waze"
     MapProvider.MIRROR -> ctx.getString(R.string.ovk_provider_mirror)
+    MapProvider.WEB -> ctx.getString(R.string.ovk_provider_web)
+    MapProvider.BUILTIN_GSEARCH -> ctx.getString(R.string.ovk_provider_gsearch)
 }
 
 @Composable
@@ -379,10 +387,17 @@ private fun MapProviderDialog(
                 Text(stringResource(R.string.ovk_dlg_map_title, bikeName), color = c.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Text(stringResource(R.string.ovk_garage_map_subtitle), color = c.inkDim, fontSize = 12.5.sp)
                 Spacer(Modifier.size(4.dp))
-                ChoiceRow("Overtake", stringResource(R.string.ovk_map_sub_builtin), primary = current == MapProvider.BUILTIN) { onPick(MapProvider.BUILTIN) }
-                ChoiceRow("Google Maps", stringResource(R.string.ovk_map_sub_google), primary = current == MapProvider.GOOGLE) { onPick(MapProvider.GOOGLE) }
-                ChoiceRow("Waze", stringResource(R.string.ovk_map_sub_waze), primary = current == MapProvider.WAZE) { onPick(MapProvider.WAZE) }
-                ChoiceRow(stringResource(R.string.ovk_provider_mirror), stringResource(R.string.ovk_map_sub_mirror), primary = current == MapProvider.MIRROR) { onPick(MapProvider.MIRROR) }
+                // Derivado del enum, NO escrito a mano. Eran cuatro filas literales y por eso el
+                // Navegador nunca aparecio aqui pese a existir desde hacia dias: una lista a mano deja
+                // de ver lo nuevo sin decirlo. Recorriendo MapProvider no hay nada que olvidar.
+                val ctx = LocalContext.current
+                MapProvider.entries.forEach { p ->
+                    ChoiceRow(
+                        mapProviderLabel(ctx, p),
+                        stringResource(providerSubtitleRes(p)),
+                        primary = current == p,
+                    ) { onPick(p) }
+                }
             }
         }
     }

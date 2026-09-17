@@ -97,6 +97,20 @@ class VideoPipeline(
     private var inputSurface: Surface? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: Presentation? = null
+    /** DEV HTML panel: the WebView on the dash Presentation and the watcher that reloads it on edit. */
+    private var htmlPanelView: android.webkit.WebView? = null
+    private var htmlPanelWatcher: android.os.FileObserver? = null
+
+    /**
+     * WEB provider: whether THIS pipeline handed its encoder to the browser.
+     *
+     * The browser itself is not here any more -- DashBrowserHost owns it and outlives every
+     * connection. What the pipeline still owns is the encoder surface it lent, so this flag says
+     * whether there is something to hand back on stop (and whether the screen wake taken at setup is
+     * this pipeline's to release).
+     */
+    private var browserAttached = false
+
     private var drainThread: Thread? = null
     private var aaCompositor: AaCompositor? = null
     /** Letterbox scaler for MediaProjection (whole-screen or single-app) → bike encoder. */
@@ -186,6 +200,20 @@ class VideoPipeline(
         if (projection != null) {
             log("[VIDEO] mirror mode (MediaProjection — whole screen or single app)")
             setupProjectionDisplay(projection)
+        } else if (probePresentationContent == null &&
+            dev.zanderp.opencfmoto.browser.DashBrowserPrefs.isEnabled(context)
+        ) {
+            // The WEB provider. Ahead of the GPX branch on purpose: choosing it means "show me the
+            // browser", not "show me the map".
+            log("[VIDEO] browser mode (Presentation via compositor)")
+            if (Looper.myLooper() == Looper.getMainLooper()) setupBrowserPresentation()
+            else main.post { setupBrowserPresentation() }
+        } else if (probePresentationContent == null && DashHtmlPanel.isEnabled(context)) {
+            // DEV: the dash panel is an HTML file instead of a native layout. Ahead of the GPX branch
+            // on purpose — switching it on means "show me my panel", not "show me the map".
+            log("[VIDEO] HTML panel mode (Presentation)")
+            if (Looper.myLooper() == Looper.getMainLooper()) setupHtmlPanelPresentation()
+            else main.post { setupHtmlPanelPresentation() }
         } else if (GpxSession.active) {
             log("[VIDEO] GPX viewer mode (Presentation)")
             // Soft AA→Map often runs on the main thread — set up immediately so the first IDR
@@ -522,6 +550,108 @@ class VideoPipeline(
     }
 
     /**
+     * WEB provider: own-content mode where the Presentation hosts a browser AND — unlike every other
+     * own-content path — the VirtualDisplay does **not** render straight into the encoder.
+     *
+     * It renders into an [AaCompositor] input `SurfaceTexture`, so the very same frames can also be
+     * drawn to a phone preview ([AaCompositor.setPreview]). That fan-out is the entire point: one
+     * browser, two surfaces, which is why the phone and the dash can never end up showing different
+     * pages. Source and canvas are both the bike canvas, so [ScreenFit.STRETCH] is exact here — the
+     * draw rect equals the canvas with no scaling and no rounding.
+     *
+     * Any failure falls back to the existing native content rather than leaving a black dash.
+     */
+    private fun setupBrowserPresentation() {
+        try {
+            val encSurface = inputSurface ?: run {
+                log("[VIDEO] browser: no encoder surface yet — keeping native content")
+                setupDisplayAndPresentation(); return
+            }
+            // The browser is NOT created here. It lives in DashBrowserHost, independent of any
+            // connection, so the rider can use it with no bike at all — this only hands it one more
+            // output. Projection stopping must never destroy the page they were reading.
+            dev.zanderp.opencfmoto.browser.DashBrowserHost.ensureStarted(context)
+            dev.zanderp.opencfmoto.browser.DashBrowserHost.attachEncoder(encSurface, width, height)
+            // A previous pipeline stop cleared the shared touch target; the dash needs it back.
+            dev.zanderp.opencfmoto.browser.DashBrowserHost.reassertDashTouchTarget()
+            // Same wake the map takes. Without it the WifiNetworkSpecifier request is released the
+            // moment the app stops being visible, and every PXC socket dies at once.
+            AndroidAutoService.setGpxScreenWake(context, true)
+            browserAttached = true
+            log("[VIDEO] browser attached to the encoder ${width}x$height (host owns the page)")
+        } catch (e: Exception) {
+            log("[VIDEO] browser attach failed: $e — keeping native content")
+            setupDisplayAndPresentation()
+        }
+    }
+
+    /**
+     * DEV: own-content mode where the Presentation hosts an HTML panel ([DashHtmlPanel]) instead of a
+     * native layout. Same VirtualDisplay + encoder plumbing as [setupDisplayAndPresentation].
+     *
+     * A [android.os.FileObserver] on the panel folder reloads the page when the file changes, so the
+     * dash updates from an `adb push` with no reconnect and no reinstall — that loop is the whole point
+     * of the HTML panel, and without the watcher it would still cost a restart per edit.
+     */
+    private fun setupHtmlPanelPresentation() {
+        try {
+            val panel = DashHtmlPanel.ensureSeeded(context)
+                ?: run {
+                    log("[VIDEO] HTML panel: no panel file and the folder could not be created — keeping native content")
+                    setupDisplayAndPresentation(); return
+                }
+            val display = createOwnVirtualDisplay() ?: return
+            val pres = Presentation(context, display)
+            val host = FrameLayout(pres.context)
+            val wv = android.webkit.WebView(pres.context).apply {
+                setBackgroundColor(Color.BLACK)
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                // file:// is how the panel is loaded at all; it defaults to OFF from API 30.
+                settings.allowFileAccess = true
+            }
+            host.addView(wv, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            pres.setContentView(host)
+            pres.show()
+            presentation = pres
+            htmlPanelView = wv
+            wv.loadUrl("file://${panel.absolutePath}")
+            // SAME wake the GPX Presentation takes (see setupGpxPresentation). Without it the bike link
+            // dies seconds after the app stops being visible, and NOT for lack of rendering: the bike
+            // network is held by a `WifiNetworkSpecifier` request, which the platform only keeps
+            // fulfillable while the app is foreground-visible OR has a foreground service. Backgrounding
+            // without the FGS makes the framework release it
+            // (`releaseRequestAsUnfulfillableByAnyFactory`) and every PXC socket dies at once with
+            // "Software caused connection abort". Measured on the 450NK: home → sockets dead in ~5 s,
+            // screen off → ~0.5 s.
+            AndroidAutoService.setGpxScreenWake(context, true)
+            log("[VIDEO] HTML panel shown on virtual display ← ${panel.absolutePath}")
+
+            // Reload on edit. MODIFY alone misses the common "write to temp, rename over" shape that
+            // adb push and most editors use, so watch the folder for the moves/creates too.
+            val mask = android.os.FileObserver.CLOSE_WRITE or android.os.FileObserver.MOVED_TO or
+                android.os.FileObserver.CREATE
+            val watcher = object : android.os.FileObserver(DashHtmlPanel.dir(context), mask) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path == null || !path.endsWith(".html", ignoreCase = true)) return
+                    main.post {
+                        if (!running) return@post
+                        val f = DashHtmlPanel.resolve(DashHtmlPanel.dir(context)) ?: return@post
+                        log("[VIDEO] HTML panel changed ($path) — reloading")
+                        htmlPanelView?.loadUrl("file://${f.absolutePath}")
+                    }
+                }
+            }
+            watcher.startWatching()
+            htmlPanelWatcher = watcher
+        } catch (e: Exception) {
+            log("[VIDEO] HTML panel failed: $e — falling back to native content")
+            setupDisplayAndPresentation()
+        }
+    }
+
+    /**
      * DEV PROBE ONLY (own-content mode). Identical VirtualDisplay + encoder plumbing as
      * [setupDisplayAndPresentation] / [setupGpxPresentation] — the ONE difference is that the
      * Presentation hosts caller-supplied content ([probePresentationContent], a forced-MapLibre
@@ -598,7 +728,12 @@ class VideoPipeline(
         }
     }
 
-    private fun createOwnVirtualDisplay(): android.view.Display? {
+    /**
+     * @param target where the display renders. Defaults to the encoder's own input surface, which is
+     *   every path except the WEB provider — that one interposes a compositor so the frames can also
+     *   reach a phone preview.
+     */
+    private fun createOwnVirtualDisplay(target: Surface? = null): android.view.Display? {
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         // Match Ride MO dumpsys: PRIVATE (default without PUBLIC) | PRESENTATION | OWN_CONTENT_ONLY.
         // NEVER_BLANK is applied by the system for private virtual displays — not a create flag.
@@ -609,7 +744,9 @@ class VideoPipeline(
         // OEM Yunmo path overrides via [ownDisplayDensityDpi] (187).
         val densityDpi = ownDisplayDensityDpi
             ?: Math.round(160.0 * width / TARGET_DASH_WIDTH_DP).toInt().coerceIn(160, 640)
-        val vd = dm.createVirtualDisplay("OpenCfMoto", width, height, densityDpi, inputSurface, flags)
+        val vd = dm.createVirtualDisplay(
+            "OpenCfMoto", width, height, densityDpi, target ?: inputSurface, flags,
+        )
         virtualDisplay = vd
         log(
             "[VIDEO] own display ${width}x${height} @${densityDpi}dpi " +
@@ -859,7 +996,9 @@ class VideoPipeline(
         // Soft AA→Map keeps the FGS wake; only release when this was the map Presentation itself
         // or a full stop (abandonNavigation). Soft-switch stops the AA compositor with
         // abandonNavigation=false and must not drop the screen wake before GPX attaches.
-        if (abandonNavigation || gpxDashUi != null) {
+        // …and the HTML panel counts as "this was the Presentation itself": it takes the same wake, so
+        // it must hand it back, or a stopped panel would keep the FGS alive for nothing.
+        if (abandonNavigation || gpxDashUi != null || htmlPanelView != null || browserAttached) {
             AndroidAutoService.setGpxScreenWake(context, false)
         }
         GpxSession.clearTouchTarget()
@@ -875,10 +1014,26 @@ class VideoPipeline(
             try { onProbeStop?.invoke() } catch (_: Exception) {}
             try { gpxDashUi?.release() } catch (_: Exception) {}
             gpxDashUi = null
+            // The watcher stops FIRST: a reload posted after the Presentation is gone would touch a
+            // destroyed WebView.
+            try { htmlPanelWatcher?.stopWatching() } catch (_: Exception) {}
+            htmlPanelWatcher = null
+            try {
+                htmlPanelView?.let { (it.parent as? android.view.ViewGroup)?.removeView(it); it.destroy() }
+            } catch (_: Exception) {}
+            htmlPanelView = null
             try { presentation?.dismiss() } catch (_: Exception) {}
             presentation = null
             try { virtualDisplay?.release() } catch (_: Exception) {}
             virtualDisplay = null
+        }
+        // The browser is NOT torn down here: DashBrowserHost owns it and the rider keeps browsing on
+        // the phone after the bike goes away. What must be undone is the loan of the encoder surface,
+        // and it has to happen HERE -- synchronously, before inputSurface.release() a few lines down --
+        // not inside the main.post above, which runs later and would free the surface first.
+        if (browserAttached) {
+            try { dev.zanderp.opencfmoto.browser.DashBrowserHost.detachEncoder() } catch (_: Exception) {}
+            browserAttached = false
         }
         try { codec?.stop() } catch (_: Exception) {}
         try { codec?.release() } catch (_: Exception) {}

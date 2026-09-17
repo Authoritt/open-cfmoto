@@ -493,6 +493,14 @@ class GpxDashUi(
         /** Long-press pin: save/home/marker only — no route / Go until opened from search. */
         var pinSetupOnly = false
         var lastMapBearing = 0f
+        /**
+         * El ultimo rumbo de MARCHA (curso GPS), que es lo que se mantiene al parar.
+         *
+         * Proyectando, el telefono va en un bolsillo o en la maleta: su brujula dice hacia donde
+         * apunta EL TELEFONO, que no tiene nada que ver con hacia donde apunta la moto. Esto es lo
+         * que Maps sostiene cuando te detienes, en vez de girar el mapa porque moviste el aparato.
+         */
+        var lastCourse: Float? = null
         // Magnetometer/rotation-vector heading (device facing), used when stopped or
         // when GPS course is unavailable, so the compass reacts to physically turning.
         var deviceHeading = 0f

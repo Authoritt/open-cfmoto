@@ -16,7 +16,40 @@ import kotlinx.coroutines.flow.map
 enum class AppMode { CFMOTO, ANDROID_AUTO }
 
 /** Which map reaches the dash. BUILTIN is the AA-free star of CFMOTO mode. */
-enum class MapProvider { BUILTIN, GOOGLE, WAZE, MIRROR }
+/**
+ * Which map the rider gets. Persisted BY NAME — append only, never reorder or rename: the stored
+ * string of an already-paired install has to keep meaning what it meant.
+ *
+ * WEB is the browser projected to the dash ([dev.zanderp.opencfmoto.browser.DashBrowser]): one WebView
+ * at the bike canvas size, driven from the dash touchscreen or from the phone.
+ */
+/**
+ * Which map the cockpit and the dash show.
+ *
+ * APPEND-ONLY: the value is persisted BY NAME, so reordering or renaming silently moves every rider
+ * who had picked one. [BUILTIN_GSEARCH] is the native map with a different way of finding a
+ * destination, not a different map -- see [dev.zanderp.opencfmoto.browser.GooglePlaceSearch].
+ */
+enum class MapProvider { BUILTIN, GOOGLE, WAZE, MIRROR, WEB, BUILTIN_GSEARCH }
+
+/**
+ * Does this provider paint OUR map? Overtake and every variant of it.
+ *
+ * One concept instead of `p == BUILTIN || p == BUILTIN_GSEARCH` copied around: the fork has already
+ * been bitten twice by a hand-written list that stopped seeing a new value without saying so.
+ */
+val MapProvider.rendersNativeMap: Boolean
+    get() = this == MapProvider.BUILTIN || this == MapProvider.BUILTIN_GSEARCH
+
+/**
+ * Pintamos NOSOTROS lo que va al tablero con este proveedor.
+ *
+ * Google y Waze no: los pinta Android Auto, y el espejo necesita antes el consentimiento de captura.
+ * Para esos, cambiar de mapa no es re-armar contenido sino cambiar el MODO de conexion, asi que
+ * reconstruirles el pipeline por su cuenta dejaria el tablero en negro.
+ */
+val MapProvider.paintedByUs: Boolean
+    get() = rendersNativeMap || this == MapProvider.WEB
 
 /**
  * Which engine renders the built-in dash map projected to the bike (VirtualDisplay → H.264).
@@ -92,6 +125,25 @@ class SettingsStore(private val context: Context) {
     val onboardingDone: Flow<Boolean> = context.cockpitDataStore.data.map { it[Keys.onboardingDone] ?: false }
 
     suspend fun setDefaultMode(mode: AppMode) = edit { it[Keys.defaultMode] = mode.name }
+    /**
+     * Set the provider AND mirror it into
+     * [dev.zanderp.opencfmoto.browser.DashBrowserPrefs] in the same action.
+     *
+     * `VideoPipeline` cannot suspend to collect this DataStore Flow while it is choosing a
+     * presentation, so it reads a plain-prefs mirror instead. Two copies of the same rule always
+     * diverge unless one place writes both — every provider change goes through here, never through
+     * [setMapProvider] alone.
+     */
+    suspend fun setMapProviderMirrored(p: MapProvider) {
+        setMapProvider(p)
+        dev.zanderp.opencfmoto.browser.DashBrowserPrefs.setEnabled(context, p == MapProvider.WEB)
+        // Y decirselo al tablero, que si no no se entera. VideoPipeline lee el proveedor UNA vez, al
+        // arrancar la proyeccion: hasta ahora cambiar de mapa con la moto conectada no hacia nada
+        // hasta desconectar y volver a conectar. Re-armar NO toca PXC ni el Wi-Fi -- es la misma
+        // maquinaria del salto AA->Mapa, que lleva tiempo funcionando en la moto.
+        if (p.paintedByUs) dev.zanderp.opencfmoto.BikeLink.requestDashRearm("cambio de mapa a ${p.name}")
+    }
+
     suspend fun setMapProvider(p: MapProvider) = edit { it[Keys.mapProvider] = p.name }
     suspend fun setDashRenderer(r: DashRenderer) = edit { it[Keys.dashRenderer] = r.name }
     suspend fun setThemeMode(m: ThemeMode) = edit { it[Keys.themeMode] = m.name }
