@@ -562,6 +562,15 @@ class VideoPipeline(
             presentation = pres
             htmlPanelView = wv
             wv.loadUrl("file://${panel.absolutePath}")
+            // SAME wake the GPX Presentation takes (see setupGpxPresentation). Without it the bike link
+            // dies seconds after the app stops being visible, and NOT for lack of rendering: the bike
+            // network is held by a `WifiNetworkSpecifier` request, which the platform only keeps
+            // fulfillable while the app is foreground-visible OR has a foreground service. Backgrounding
+            // without the FGS makes the framework release it
+            // (`releaseRequestAsUnfulfillableByAnyFactory`) and every PXC socket dies at once with
+            // "Software caused connection abort". Measured on the 450NK: home → sockets dead in ~5 s,
+            // screen off → ~0.5 s.
+            AndroidAutoService.setGpxScreenWake(context, true)
             log("[VIDEO] HTML panel shown on virtual display ← ${panel.absolutePath}")
 
             // Reload on edit. MODIFY alone misses the common "write to temp, rename over" shape that
@@ -925,7 +934,9 @@ class VideoPipeline(
         // Soft AA→Map keeps the FGS wake; only release when this was the map Presentation itself
         // or a full stop (abandonNavigation). Soft-switch stops the AA compositor with
         // abandonNavigation=false and must not drop the screen wake before GPX attaches.
-        if (abandonNavigation || gpxDashUi != null) {
+        // …and the HTML panel counts as "this was the Presentation itself": it takes the same wake, so
+        // it must hand it back, or a stopped panel would keep the FGS alive for nothing.
+        if (abandonNavigation || gpxDashUi != null || htmlPanelView != null) {
             AndroidAutoService.setGpxScreenWake(context, false)
         }
         GpxSession.clearTouchTarget()
