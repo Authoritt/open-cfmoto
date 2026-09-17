@@ -18,14 +18,29 @@ class MapProviderPersistenceTest {
     @Test
     fun `the persisted names never change`() {
         assertEquals(
-            listOf("BUILTIN", "GOOGLE", "WAZE", "MIRROR", "WEB"),
+            listOf("BUILTIN", "GOOGLE", "WAZE", "MIRROR", "WEB", "BUILTIN_GSEARCH"),
             MapProvider.entries.map { it.name },
         )
     }
 
+    /**
+     * The previous shape of this test only checked that WEB was last, which stopped being the point
+     * the moment a sixth value arrived. What actually matters is that nothing already shipped MOVED:
+     * a value that changes ordinal repoints every install that had stored it.
+     */
     @Test
-    fun `WEB is appended last so existing ordinals are untouched`() {
-        assertEquals(MapProvider.entries.size - 1, MapProvider.WEB.ordinal)
+    fun `every value that has already shipped keeps its place`() {
+        val shipped = mapOf(
+            "BUILTIN" to 0,
+            "GOOGLE" to 1,
+            "WAZE" to 2,
+            "MIRROR" to 3,
+            "WEB" to 4,
+            "BUILTIN_GSEARCH" to 5,
+        )
+        shipped.forEach { (name, ordinal) ->
+            assertEquals("${name} moved", ordinal, MapProvider.valueOf(name).ordinal)
+        }
     }
 
     @Test

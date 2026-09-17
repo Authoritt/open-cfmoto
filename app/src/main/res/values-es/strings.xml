@@ -688,6 +688,11 @@
     <string name="ovk_map_reach_web">Un navegador web en el tablero, del mismo tamaño que el tablero. Lo manejas desde aquí o desde el propio tablero; arranca en Google Maps.</string>
     <string name="ovk_map_action_web">Abrir el mando del navegador</string>
     <string name="ovk_browser_address_hint">Busca o escribe una dirección web</string>
+    <string name="ovk_provider_gsearch">Overtake + Google</string>
+    <string name="ovk_map_sub_gsearch">Mapa Overtake · busca con Google</string>
+    <string name="ovk_map_reach_gsearch">El mismo mapa Overtake en el tablero, dibujado y navegado por nosotros. Lo que cambia es la búsqueda: escribes, Google responde con su lista y tú eliges.</string>
+    <string name="ovk_gsearch_empty">Google no encontro nada con ese nombre</string>
+    <string name="ovk_gsearch_failed">No se pudo preguntar a Google. Revisa la conexion.</string>
     <string name="ovk_app_not_installed">%1$s no está instalado</string>
     <string name="ovk_map_opt_dash">tablero</string>
     <string name="ovk_map_opt_mirror">espejo</string>

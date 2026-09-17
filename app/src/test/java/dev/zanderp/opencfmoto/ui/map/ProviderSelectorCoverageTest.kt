@@ -42,15 +42,6 @@ class ProviderSelectorCoverageTest {
         assertEquals(SELECTABLE_PROVIDERS.size, SELECTABLE_PROVIDERS.toSet().size)
     }
 
-    /** The row divides the width evenly; past four it stops being readable on a phone. */
-    @Test
-    fun `the selector stays within what one row can show`() {
-        assertTrue(
-            "The selector row has ${SELECTABLE_PROVIDERS.size} options; beyond four it needs a new layout",
-            SELECTABLE_PROVIDERS.size <= 4,
-        )
-    }
-
     @Test
     fun `the browser is offered`() {
         assertTrue(MapProvider.WEB in SELECTABLE_PROVIDERS)

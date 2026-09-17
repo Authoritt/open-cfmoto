@@ -23,7 +23,23 @@ enum class AppMode { CFMOTO, ANDROID_AUTO }
  * WEB is the browser projected to the dash ([dev.zanderp.opencfmoto.browser.DashBrowser]): one WebView
  * at the bike canvas size, driven from the dash touchscreen or from the phone.
  */
-enum class MapProvider { BUILTIN, GOOGLE, WAZE, MIRROR, WEB }
+/**
+ * Which map the cockpit and the dash show.
+ *
+ * APPEND-ONLY: the value is persisted BY NAME, so reordering or renaming silently moves every rider
+ * who had picked one. [BUILTIN_GSEARCH] is the native map with a different way of finding a
+ * destination, not a different map -- see [dev.zanderp.opencfmoto.browser.GooglePlaceSearch].
+ */
+enum class MapProvider { BUILTIN, GOOGLE, WAZE, MIRROR, WEB, BUILTIN_GSEARCH }
+
+/**
+ * Does this provider paint OUR map? Overtake and every variant of it.
+ *
+ * One concept instead of `p == BUILTIN || p == BUILTIN_GSEARCH` copied around: the fork has already
+ * been bitten twice by a hand-written list that stopped seeing a new value without saying so.
+ */
+val MapProvider.rendersNativeMap: Boolean
+    get() = this == MapProvider.BUILTIN || this == MapProvider.BUILTIN_GSEARCH
 
 /**
  * Which engine renders the built-in dash map projected to the bike (VirtualDisplay → H.264).

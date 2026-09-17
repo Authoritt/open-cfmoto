@@ -219,12 +219,13 @@ fun MapScreen(nav: NavController) {
 }
 
 @StringRes
-private fun providerSubtitleRes(p: MapProvider): Int = when (p) {
+internal fun providerSubtitleRes(p: MapProvider): Int = when (p) {
     MapProvider.BUILTIN -> R.string.ovk_map_sub_builtin
     MapProvider.GOOGLE -> R.string.ovk_map_sub_google
     MapProvider.WAZE -> R.string.ovk_map_sub_waze
     MapProvider.MIRROR -> R.string.ovk_map_sub_mirror
     MapProvider.WEB -> R.string.ovk_map_sub_web
+    MapProvider.BUILTIN_GSEARCH -> R.string.ovk_map_sub_gsearch
 }
 
 @StringRes
@@ -234,6 +235,7 @@ private fun providerReachRes(p: MapProvider): Int = when (p) {
     MapProvider.WAZE -> R.string.ovk_map_reach_waze
     MapProvider.MIRROR -> R.string.ovk_map_reach_mirror
     MapProvider.WEB -> R.string.ovk_map_reach_web
+    MapProvider.BUILTIN_GSEARCH -> R.string.ovk_map_reach_gsearch
 }
 
 @StringRes
@@ -269,6 +271,7 @@ internal val SELECTABLE_PROVIDERS = listOf(
     MapProvider.GOOGLE,
     MapProvider.WAZE,
     MapProvider.WEB,
+    MapProvider.BUILTIN_GSEARCH,
 )
 
 /** Deliberately absent: Mirror is armed from its own screen (it needs screen-capture consent first). */
@@ -281,6 +284,7 @@ private fun providerOptionLabel(p: MapProvider): String = when (p) {
     MapProvider.WAZE -> "Waze"
     MapProvider.WEB -> stringResource(R.string.ovk_provider_web)
     MapProvider.MIRROR -> stringResource(R.string.ovk_provider_mirror)
+    MapProvider.BUILTIN_GSEARCH -> stringResource(R.string.ovk_provider_gsearch)
 }
 
 /** Where the provider ends up: drawn on the dash by us, or handed to Android Auto. */

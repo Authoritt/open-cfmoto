@@ -663,6 +663,7 @@ fun CockpitScreen(nav: NavController) {
             CockpitSearchOverlay(
                 providerLabel = providerLabel(ctx, provider),
                 handsToNavApp = handsToNavApp,
+                useGoogle = provider == MapProvider.BUILTIN_GSEARCH,
                 onDismiss = { showSearch = false },
                 onPick = { place ->
                     if (handsToNavApp) {
@@ -1041,6 +1042,7 @@ internal fun providerLabel(ctx: Context, p: MapProvider): String = when (p) {
     MapProvider.MIRROR -> ctx.getString(R.string.ovk_provider_mirror)
     MapProvider.WEB -> ctx.getString(R.string.ovk_provider_web)
     MapProvider.BUILTIN -> "Overtake" // the native map, branded "Overtake" (label only; enum stays BUILTIN)
+    MapProvider.BUILTIN_GSEARCH -> ctx.getString(R.string.ovk_provider_gsearch)
 }
 
 /**
@@ -1093,6 +1095,7 @@ internal fun nextProvider(p: MapProvider): MapProvider {
 private fun CockpitSearchOverlay(
     providerLabel: String,
     handsToNavApp: Boolean,
+    useGoogle: Boolean,
     onDismiss: () -> Unit,
     onPick: (MapPlace) -> Unit,
     onSubmitText: (String) -> Unit,
@@ -1102,6 +1105,17 @@ private fun CockpitSearchOverlay(
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<SearchPick>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
+    // Por que un aviso y no una lista vacia: "Google no encontro nada" y "no se pudo preguntar a
+    // Google" se ven IGUAL si solo se deja de pintar filas, y son cosas distintas -- una es una
+    // respuesta y la otra es una averia. La escalera de respaldo tenia que ser explicita.
+    var notice by remember { mutableStateOf<String?>(null) }
+    // Que texto tiene ya una respuesta EXPLICITA en pantalla.
+    //
+    // Los dos escalones escriben la misma lista, y medido en el telefono terminan en cualquier orden:
+    // con "taller" el escalon de teclear llego 1,4 s DESPUES de Google y enterro sus cinco sitios; con
+    // "Chipichape" gano Google. Una carrera que decide la latencia de la red no es un diseno. La
+    // respuesta que el rider PIDIO gana siempre a la que solo aparecio mientras escribia.
+    var answeredFor by remember { mutableStateOf<String?>(null) }
     // The explicit search: a counter, not a boolean, because pressing search TWICE on the same text
     // must run it twice (the rider is retrying) and a LaunchedEffect only restarts when its key
     // changes. The text is captured ALONGSIDE the tick so the effect can never be re-triggered by a
@@ -1152,6 +1166,8 @@ private fun CockpitSearchOverlay(
 
     LaunchedEffect(query) {
         val q = query.trim()
+        // El texto cambio: la respuesta explicita anterior era de OTRA busqueda.
+        answeredFor = null
         if (q.length < 2) {
             // Empty/short query is served entirely from local state (rendered below) — no network.
             results = emptyList()
@@ -1167,7 +1183,7 @@ private fun CockpitSearchOverlay(
         } else {
             emptyList()
         }
-        results = rankPicks(q, bLat, bLon, cached, recents, favorites, homePlace)
+        if (answeredFor != q) results = rankPicks(q, bLat, bLon, cached, recents, favorites, homePlace)
         searching = true
         // THE debounce for place search — the only one on this path, deliberately. Nothing leaves
         // the device until the rider pauses: LaunchedEffect(query) cancels this coroutine on the next
@@ -1192,13 +1208,18 @@ private fun CockpitSearchOverlay(
             LogBus.log("[cockpit-search] ${e.message ?: e}")
             emptyList()
         }
-        results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
+        // La busqueda explicita pudo contestar mientras esta esperaba a la red. Si lo hizo, esta se
+        // calla: escribir aqui seria sustituir lo que el rider pidio por lo que salio solo.
+        if (answeredFor != q) results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
         searching = false
     }
 
     // The EXPLICIT search: bumped by the keyboard's search key or by the ⌕ button, never by typing.
     // This is the only trigger allowed to spend a Nominatim request (SearchIntent.SUBMIT) — where the
     // precise local answers (the barrio, the street number) come from.
+    // Un aviso pertenece al texto que lo provoco: si el rider sigue escribiendo, deja de ser cierto.
+    LaunchedEffect(query) { notice = null }
+
     LaunchedEffect(deepSearchTick) {
         if (deepSearchTick == 0) return@LaunchedEffect
         val q = deepSearchQuery
@@ -1207,6 +1228,38 @@ private fun CockpitSearchOverlay(
         val bLon = biasLon
         val near = if (bLat != null && bLon != null) dev.overtake.maps.model.GeoPoint(bLat, bLon) else null
         searching = true
+        notice = null
+        if (useGoogle) {
+            // El ORDEN de Google es la razon de ser de este proveedor, asi que NO se re-ordena:
+            // rankPicks puntuaria estos resultados con nuestra mezcla y desharia en silencio justo lo
+            // que el dueno pidio ("ese busca mejor").
+            val g = dev.zanderp.opencfmoto.browser.GooglePlaceSearch.search(ctx, q)
+            if (query.trim() == q) {
+                // Reclamado incluso cuando Google no encontro nada: si no, el escalon de teclear
+                // pintaria SUS resultados debajo del aviso "Google no encontro nada", que es peor que
+                // la lista vacia -- dice una cosa y ensena otra.
+                answeredFor = q
+                when (g) {
+                    is dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Found -> {
+                        results = g.hits.map { h ->
+                            val place = MapPlace(h.name, h.lat, h.lon, "google", h.subtitle ?: "")
+                            SearchPick(place, SearchKind.RESULT, distanceTo(bLat, bLon, place))
+                        }
+
+                    }
+                    dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Empty -> {
+                        results = emptyList()
+                        notice = ctx.getString(R.string.ovk_gsearch_empty)
+                    }
+                    is dev.zanderp.opencfmoto.browser.GooglePlaceSearch.Result.Failed -> {
+                        results = emptyList()
+                        notice = ctx.getString(R.string.ovk_gsearch_failed)
+                    }
+                }
+            }
+            searching = false
+            return@LaunchedEffect
+        }
         val net = try {
             search.query(q, near, SearchIntent.SUBMIT)
         } catch (ce: kotlinx.coroutines.CancellationException) {
@@ -1218,6 +1271,7 @@ private fun CockpitSearchOverlay(
         // The rider kept typing while the precise provider was answering: that answer belongs to text
         // that is no longer on screen, so drop it instead of painting a stale list over the live one.
         if (query.trim() == q) {
+            answeredFor = q
             results = rankPicks(q, bLat, bLon, net, recents, favorites, homePlace)
         }
         searching = false
@@ -1290,7 +1344,9 @@ private fun CockpitSearchOverlay(
             } else {
                 if (results.isEmpty()) {
                     Text(
-                        if (searching) stringResource(R.string.ovk_searching) else stringResource(R.string.ovk_no_results),
+                        notice
+                            ?: if (searching) stringResource(R.string.ovk_searching)
+                            else stringResource(R.string.ovk_no_results),
                         color = c.inkDim,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),

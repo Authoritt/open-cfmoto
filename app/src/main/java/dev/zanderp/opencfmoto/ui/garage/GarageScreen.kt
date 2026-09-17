@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavController
 import dev.zanderp.opencfmoto.R
+import dev.zanderp.opencfmoto.ui.map.providerSubtitleRes
 import dev.zanderp.opencfmoto.BikeMemory
 import dev.zanderp.opencfmoto.LogBus
 import dev.zanderp.opencfmoto.NearbyDevices
@@ -315,6 +316,7 @@ private fun mapProviderLabel(ctx: Context, p: MapProvider) = when (p) {
     MapProvider.BUILTIN -> "Overtake"; MapProvider.GOOGLE -> "Google Maps"; MapProvider.WAZE -> "Waze"
     MapProvider.MIRROR -> ctx.getString(R.string.ovk_provider_mirror)
     MapProvider.WEB -> ctx.getString(R.string.ovk_provider_web)
+    MapProvider.BUILTIN_GSEARCH -> ctx.getString(R.string.ovk_provider_gsearch)
 }
 
 @Composable
@@ -385,10 +387,17 @@ private fun MapProviderDialog(
                 Text(stringResource(R.string.ovk_dlg_map_title, bikeName), color = c.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Text(stringResource(R.string.ovk_garage_map_subtitle), color = c.inkDim, fontSize = 12.5.sp)
                 Spacer(Modifier.size(4.dp))
-                ChoiceRow("Overtake", stringResource(R.string.ovk_map_sub_builtin), primary = current == MapProvider.BUILTIN) { onPick(MapProvider.BUILTIN) }
-                ChoiceRow("Google Maps", stringResource(R.string.ovk_map_sub_google), primary = current == MapProvider.GOOGLE) { onPick(MapProvider.GOOGLE) }
-                ChoiceRow("Waze", stringResource(R.string.ovk_map_sub_waze), primary = current == MapProvider.WAZE) { onPick(MapProvider.WAZE) }
-                ChoiceRow(stringResource(R.string.ovk_provider_mirror), stringResource(R.string.ovk_map_sub_mirror), primary = current == MapProvider.MIRROR) { onPick(MapProvider.MIRROR) }
+                // Derivado del enum, NO escrito a mano. Eran cuatro filas literales y por eso el
+                // Navegador nunca aparecio aqui pese a existir desde hacia dias: una lista a mano deja
+                // de ver lo nuevo sin decirlo. Recorriendo MapProvider no hay nada que olvidar.
+                val ctx = LocalContext.current
+                MapProvider.entries.forEach { p ->
+                    ChoiceRow(
+                        mapProviderLabel(ctx, p),
+                        stringResource(providerSubtitleRes(p)),
+                        primary = current == p,
+                    ) { onPick(p) }
+                }
             }
         }
     }
