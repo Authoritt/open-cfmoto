@@ -514,7 +514,7 @@ fun CockpitScreen(nav: NavController) {
                     // Google/Waze, which the rider read as "a second popup instead of the box I was
                     // already using"). What changes with the provider is only what submit does.
                     onSearch = { showSearch = true },
-                    onCycleProvider = { scope.launch { store.setMapProvider(nextProvider(provider)) } },
+                    onCycleProvider = { scope.launch { store.setMapProviderMirrored(nextProvider(provider)) } },
                 )
                 // Persistent day/night/auto toggle (compact) — flip the map look without leaving the map.
                 if (!needsMapsforgeMap) {

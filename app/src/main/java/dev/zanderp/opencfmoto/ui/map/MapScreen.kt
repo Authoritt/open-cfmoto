@@ -188,7 +188,7 @@ fun MapScreen(nav: NavController) {
             }
             ProviderSelector(
                 selected = provider,
-                onSelect = { scope.launch { store.setMapProvider(it) } },
+                onSelect = { p -> scope.launch { store.setMapProviderMirrored(p) }; if (p == MapProvider.WEB) nav.navigate(Routes.BROWSER) },
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(10.dp),
             )
             // Persistent day/night/auto toggle, on the map itself (not just in Settings).

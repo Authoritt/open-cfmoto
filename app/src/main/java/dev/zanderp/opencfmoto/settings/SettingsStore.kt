@@ -99,6 +99,20 @@ class SettingsStore(private val context: Context) {
     val onboardingDone: Flow<Boolean> = context.cockpitDataStore.data.map { it[Keys.onboardingDone] ?: false }
 
     suspend fun setDefaultMode(mode: AppMode) = edit { it[Keys.defaultMode] = mode.name }
+    /**
+     * Set the provider AND mirror it into
+     * [dev.zanderp.opencfmoto.browser.DashBrowserPrefs] in the same action.
+     *
+     * `VideoPipeline` cannot suspend to collect this DataStore Flow while it is choosing a
+     * presentation, so it reads a plain-prefs mirror instead. Two copies of the same rule always
+     * diverge unless one place writes both — every provider change goes through here, never through
+     * [setMapProvider] alone.
+     */
+    suspend fun setMapProviderMirrored(p: MapProvider) {
+        setMapProvider(p)
+        dev.zanderp.opencfmoto.browser.DashBrowserPrefs.setEnabled(context, p == MapProvider.WEB)
+    }
+
     suspend fun setMapProvider(p: MapProvider) = edit { it[Keys.mapProvider] = p.name }
     suspend fun setDashRenderer(r: DashRenderer) = edit { it[Keys.dashRenderer] = r.name }
     suspend fun setThemeMode(m: ThemeMode) = edit { it[Keys.themeMode] = m.name }
