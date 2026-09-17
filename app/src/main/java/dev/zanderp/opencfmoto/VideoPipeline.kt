@@ -100,6 +100,18 @@ class VideoPipeline(
     /** DEV HTML panel: the WebView on the dash Presentation and the watcher that reloads it on edit. */
     private var htmlPanelView: android.webkit.WebView? = null
     private var htmlPanelWatcher: android.os.FileObserver? = null
+
+    /** WEB provider: the projected browser and the GL stage that fans its frames out. */
+    internal var browserView: android.webkit.WebView? = null
+    internal var browserCompositor: AaCompositor? = null
+
+    /**
+     * The negotiated bike canvas, so UI can size a preview without guessing. `BikeProfile` does NOT
+     * carry a canvas size — the bike reports its own at connect time, so this pipeline is the only
+     * place that knows it.
+     */
+    internal val canvasWidth: Int get() = width
+    internal val canvasHeight: Int get() = height
     private var drainThread: Thread? = null
     private var aaCompositor: AaCompositor? = null
     /** Letterbox scaler for MediaProjection (whole-screen or single-app) → bike encoder. */
@@ -189,6 +201,14 @@ class VideoPipeline(
         if (projection != null) {
             log("[VIDEO] mirror mode (MediaProjection — whole screen or single app)")
             setupProjectionDisplay(projection)
+        } else if (probePresentationContent == null &&
+            dev.zanderp.opencfmoto.browser.DashBrowserPrefs.isEnabled(context)
+        ) {
+            // The WEB provider. Ahead of the GPX branch on purpose: choosing it means "show me the
+            // browser", not "show me the map".
+            log("[VIDEO] browser mode (Presentation via compositor)")
+            if (Looper.myLooper() == Looper.getMainLooper()) setupBrowserPresentation()
+            else main.post { setupBrowserPresentation() }
         } else if (probePresentationContent == null && DashHtmlPanel.isEnabled(context)) {
             // DEV: the dash panel is an HTML file instead of a native layout. Ahead of the GPX branch
             // on purpose — switching it on means "show me my panel", not "show me the map".
@@ -531,6 +551,69 @@ class VideoPipeline(
     }
 
     /**
+     * WEB provider: own-content mode where the Presentation hosts a browser AND — unlike every other
+     * own-content path — the VirtualDisplay does **not** render straight into the encoder.
+     *
+     * It renders into an [AaCompositor] input `SurfaceTexture`, so the very same frames can also be
+     * drawn to a phone preview ([AaCompositor.setPreview]). That fan-out is the entire point: one
+     * browser, two surfaces, which is why the phone and the dash can never end up showing different
+     * pages. Source and canvas are both the bike canvas, so [ScreenFit.STRETCH] is exact here — the
+     * draw rect equals the canvas with no scaling and no rounding.
+     *
+     * Any failure falls back to the existing native content rather than leaving a black dash.
+     */
+    private fun setupBrowserPresentation() {
+        var comp: AaCompositor? = null
+        try {
+            val encSurface = inputSurface ?: run {
+                log("[VIDEO] browser: no encoder surface yet — keeping native content")
+                setupDisplayAndPresentation(); return
+            }
+            comp = AaCompositor(log).also { it.start(bufferW = width, bufferH = height) }
+            val input = comp.inputSurface ?: run {
+                log("[VIDEO] browser: compositor gave no input surface — keeping native content")
+                comp.release(); setupDisplayAndPresentation(); return
+            }
+            comp.setOutput(encSurface, width, height, width, height, ScreenFit.STRETCH)
+            browserCompositor = comp
+
+            val display = createOwnVirtualDisplay(target = input) ?: run {
+                comp.release(); browserCompositor = null; return
+            }
+            val pres = Presentation(context, display)
+            val host = FrameLayout(pres.context)
+            val wv = dev.zanderp.opencfmoto.browser.DashBrowser.create(pres.context) { title ->
+                log("[VIDEO] browser: $title")
+            }
+            host.addView(
+                wv,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            pres.setContentView(host)
+            pres.show()
+            presentation = pres
+            browserView = wv
+            VideoPipelineHolder.set(this)
+            wv.loadUrl(dev.zanderp.opencfmoto.browser.DashBrowser.HOME_URL)
+            // Dash touches land here 1:1 — the WebView is laid out at exactly the canvas size.
+            GpxSession.setTouchTarget(wv)
+            // Same wake the map takes. Without it the WifiNetworkSpecifier request is released the
+            // moment the app stops being visible, and every PXC socket dies at once.
+            AndroidAutoService.setGpxScreenWake(context, true)
+            log("[VIDEO] browser shown on virtual display ${width}x$height (compositor fan-out)")
+        } catch (e: Exception) {
+            log("[VIDEO] browser failed: $e — keeping native content")
+            try { comp?.release() } catch (_: Exception) {}
+            browserCompositor = null
+            browserView = null
+            setupDisplayAndPresentation()
+        }
+    }
+
+    /**
      * DEV: own-content mode where the Presentation hosts an HTML panel ([DashHtmlPanel]) instead of a
      * native layout. Same VirtualDisplay + encoder plumbing as [setupDisplayAndPresentation].
      *
@@ -673,7 +756,12 @@ class VideoPipeline(
         }
     }
 
-    private fun createOwnVirtualDisplay(): android.view.Display? {
+    /**
+     * @param target where the display renders. Defaults to the encoder's own input surface, which is
+     *   every path except the WEB provider — that one interposes a compositor so the frames can also
+     *   reach a phone preview.
+     */
+    private fun createOwnVirtualDisplay(target: Surface? = null): android.view.Display? {
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         // Match Ride MO dumpsys: PRIVATE (default without PUBLIC) | PRESENTATION | OWN_CONTENT_ONLY.
         // NEVER_BLANK is applied by the system for private virtual displays — not a create flag.
@@ -684,7 +772,9 @@ class VideoPipeline(
         // OEM Yunmo path overrides via [ownDisplayDensityDpi] (187).
         val densityDpi = ownDisplayDensityDpi
             ?: Math.round(160.0 * width / TARGET_DASH_WIDTH_DP).toInt().coerceIn(160, 640)
-        val vd = dm.createVirtualDisplay("OpenCfMoto", width, height, densityDpi, inputSurface, flags)
+        val vd = dm.createVirtualDisplay(
+            "OpenCfMoto", width, height, densityDpi, target ?: inputSurface, flags,
+        )
         virtualDisplay = vd
         log(
             "[VIDEO] own display ${width}x${height} @${densityDpi}dpi " +
@@ -936,7 +1026,7 @@ class VideoPipeline(
         // abandonNavigation=false and must not drop the screen wake before GPX attaches.
         // …and the HTML panel counts as "this was the Presentation itself": it takes the same wake, so
         // it must hand it back, or a stopped panel would keep the FGS alive for nothing.
-        if (abandonNavigation || gpxDashUi != null || htmlPanelView != null) {
+        if (abandonNavigation || gpxDashUi != null || htmlPanelView != null || browserView != null) {
             AndroidAutoService.setGpxScreenWake(context, false)
         }
         GpxSession.clearTouchTarget()
@@ -956,6 +1046,22 @@ class VideoPipeline(
             // destroyed WebView.
             try { htmlPanelWatcher?.stopWatching() } catch (_: Exception) {}
             htmlPanelWatcher = null
+            // The browser: clear the touch target FIRST — a MotionEvent already posted by the dash
+            // would otherwise land on a destroyed WebView.
+            if (browserView != null) {
+                try { GpxSession.clearTouchTarget() } catch (_: Exception) {}
+                try {
+                    browserView?.let {
+                        it.loadUrl("about:blank")
+                        (it.parent as? android.view.ViewGroup)?.removeView(it)
+                        it.destroy()
+                    }
+                } catch (_: Exception) {}
+                browserView = null
+                try { browserCompositor?.release() } catch (_: Exception) {}
+                browserCompositor = null
+                VideoPipelineHolder.set(null)
+            }
             try {
                 htmlPanelView?.let { (it.parent as? android.view.ViewGroup)?.removeView(it); it.destroy() }
             } catch (_: Exception) {}
